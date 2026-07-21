@@ -23,7 +23,7 @@ contract VehicleSaleFactory {
         address _seller,
         address _buyer,
         address _intermediary,
-        address _tokenEURC,
+        address _tokenERC20,
         uint256 _vehicleTokenId,
         uint256 _vehiclePrice,
         uint256 _depositFee,
@@ -39,17 +39,17 @@ contract VehicleSaleFactory {
         require(_seller != address(0), InvalidAddress());
         require(_buyer != address(0), InvalidAddress());
         require(_intermediary != address(0), InvalidAddress());
-        require(_tokenEURC != address(0), InvalidAddress());
+        require(_tokenERC20 != address(0), InvalidAddress());
         require(_vehiclePrice > 0, InvalidVehiclePrice());
         require(bytes(_tokenURI).length > 0, EmptyTokenURI());
 
-        VehicleNFT vehicleNFT = new VehicleNFT();
+        VehicleNFT vehicleNFT = new VehicleNFT(_seller, _buyer);
 
         VehicleSaleEscrow escrow = new VehicleSaleEscrow(
             _seller,
             _buyer,
             _intermediary,
-            _tokenEURC,
+            _tokenERC20,
             address(vehicleNFT),
             _vehicleTokenId,
             _vehiclePrice,

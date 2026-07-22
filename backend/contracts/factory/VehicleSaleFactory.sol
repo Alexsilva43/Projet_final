@@ -28,6 +28,7 @@ contract VehicleSaleFactory {
         uint256 _vehiclePrice,
         uint256 _depositFee,
         uint256 _pickupFee,
+        uint256 _verificationFee,
         string calldata _tokenURI
     )
         external
@@ -54,7 +55,8 @@ contract VehicleSaleFactory {
             _vehicleTokenId,
             _vehiclePrice,
             _depositFee,
-            _pickupFee
+            _pickupFee,
+            _verificationFee
         );
 
         vehicleNFT.setEscrow(address(escrow));

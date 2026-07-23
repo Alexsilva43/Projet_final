@@ -22,6 +22,18 @@ contract VehicleSaleEscrow is IERC721Receiver {
         Disputed
     }
 
+    enum DisputeReason {
+        None,
+        CodeRejected,
+        BuyerDidNotRespond
+    }
+
+    enum VerificationResult {
+        OriginalCodeValid,
+        CorrectedCodeValid,
+        NoValidCode
+    }
+
     address private immutable seller;
     address private immutable buyer;
     address private immutable intermediary;
@@ -37,6 +49,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
     uint256 private immutable verificationFee;
 
     SaleState private state;
+    DisputeReason private disputeReason;
 
     bytes private encryptedTransferCode;
 
@@ -109,7 +122,14 @@ contract VehicleSaleEscrow is IERC721Receiver {
 
     event VehicleRecoveryRequested(address indexed seller);
 
-    event BuyerDidNotConfirm(address indexed seller);
+    event BuyerDidNotConfirm(address indexed buyer);
+
+    event TransferCodeCorrected(bytes32 previousHash, bytes32 correctedHash);
+
+    event DisputeResolved(
+        DisputeReason indexed disputeReason,
+        VerificationResult indexed verificationResult
+    );
 
     error DepositAlreadyRequested();
     error EscrowDoesNotOwnNFT();
@@ -157,6 +177,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
     error VerificationRequestDeadlineNotExpired();
     error VerificationRequestDeadlineAlreadyStarted();
     error VerificationNotRequested();
+    error InvalidDisputeReason();
+    error TransferCodeHashNotSubmitted();
 
     /// @notice Prevents reentrant calls to protected functions.
     modifier lock() {
@@ -381,9 +403,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
 
         transferCodeDeadline = block.timestamp + MAX_DELAY_TO_SEND_CODE;
 
-        bool success = tokenERC20.transfer(intermediary, depositFee);
-
-        require(success, TokenTransferFailed(address(this), intermediary));
+        _transferToken(intermediary, depositFee);
 
         emit VehicleDepositConfirmed(intermediary);
         emit WorkflowStateChanged(oldState, state);
@@ -447,13 +467,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
         isVehiclePriceFunded = false;
         isNFTDeposited = false;
 
-        bool successSeller = tokenERC20.transfer(seller, vehiclePrice);
-
-        require(successSeller, TokenTransferFailed(address(this), seller));
-
-        bool successBuyer = tokenERC20.transfer(msg.sender, verificationFee);
-
-        require(successBuyer, TokenTransferFailed(address(this), buyer));
+        _transferToken(seller, vehiclePrice);
+        _transferToken(buyer, verificationFee);
 
         vehicleNFT.safeTransferFrom(address(this), buyer, vehicleTokenId);
 
@@ -495,9 +510,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
 
         vehicleNFT.burn(vehicleTokenId);
 
-        bool success = tokenERC20.transfer(intermediary, pickupFee);
-
-        require(success, TokenTransferFailed(address(this), intermediary));
+        _transferToken(intermediary, pickupFee);
 
         emit VehicleReleased(msg.sender, buyer, vehicleTokenId);
         emit WorkflowStateChanged(oldState, state);
@@ -535,9 +548,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
         vehicleRecoveryRequired = false;
         recoveryRequested = false;
 
-        bool success = tokenERC20.transfer(intermediary, pickupFee);
-
-        require(success, TokenTransferFailed(address(this), intermediary));
+        _transferToken(intermediary, pickupFee);
 
         emit VehicleRecovered(intermediary, seller, vehicleTokenId);
     }
@@ -570,10 +581,16 @@ contract VehicleSaleEscrow is IERC721Receiver {
             CancellationNotAllowed()
         );
 
+        _transferToken(buyer, verificationFee);
+
         _executeEscrowCancellation(msg.sender);
     }
 
-    function cancelAfterConfirmCodeDeadline() external lock onlyBuyerOrSeller {
+    function cancelAfterConfirmAndVerificationCodeDeadline()
+        external
+        lock
+        onlyBuyerOrSeller
+    {
         require(state == SaleState.Submitted, InvalidSaleState());
         require(confirmCodeDeadline != 0, ConfirmCodeDeadlineNotStarted());
         require(
@@ -586,6 +603,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
 
         vehicleRecoveryRequired = true;
 
+        _transferToken(buyer, verificationFee);
+
         _executeEscrowCancellation(msg.sender);
     }
 
@@ -596,6 +615,11 @@ contract VehicleSaleEscrow is IERC721Receiver {
         onlyBuyerOrSeller
     {
         require(state == SaleState.Disputed, InvalidSaleState());
+
+        require(
+            disputeReason == DisputeReason.CodeRejected,
+            InvalidDisputeReason()
+        );
 
         require(
             verificationRequestDeadline != 0,
@@ -611,6 +635,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
 
         vehicleRecoveryRequired = true;
 
+        _transferToken(buyer, verificationFee);
+
         _executeEscrowCancellation(msg.sender);
     }
 
@@ -619,16 +645,13 @@ contract VehicleSaleEscrow is IERC721Receiver {
         SaleState oldState = state;
 
         state = SaleState.Cancelled;
+        isVerificationRequested = false;
+        disputeReason = DisputeReason.None;
 
         if (isVehiclePriceFunded) {
             isVehiclePriceFunded = false;
 
-            bool success = tokenERC20.transfer(
-                buyer,
-                vehiclePrice + verificationFee
-            );
-
-            require(success, TokenTransferFailed(address(this), buyer));
+            _transferToken(buyer, vehiclePrice);
         }
 
         if (isNFTDeposited) {
@@ -647,7 +670,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
     }
 
     /// @notice Rejects the submitted transfer code before the confirmation deadline.
-    function rejectTransferCode() external onlyBuyer {
+    function rejectTransferCode() external lock onlyBuyer {
         require(state == SaleState.Submitted, InvalidSaleState());
 
         require(confirmCodeDeadline != 0, ConfirmCodeDeadlineNotStarted());
@@ -662,9 +685,13 @@ contract VehicleSaleEscrow is IERC721Receiver {
             VerificationRequestDeadlineAlreadyStarted()
         );
 
+        require(disputeReason == DisputeReason.None, InvalidDisputeReason());
+
         SaleState oldState = state;
 
         state = SaleState.Disputed;
+
+        disputeReason = DisputeReason.CodeRejected;
 
         verificationRequestDeadline =
             block.timestamp +
@@ -680,10 +707,16 @@ contract VehicleSaleEscrow is IERC721Receiver {
             InvalidSaleState()
         );
 
+        require(!isVerificationRequested, VerificationAlreadyRequested());
+
         SaleState oldState = state;
 
         if (state == SaleState.Disputed) {
-            // Cas 1 : l’acheteur a explicitement rejeté le code.
+            require(
+                disputeReason == DisputeReason.CodeRejected,
+                InvalidDisputeReason()
+            );
+
             require(
                 verificationRequestDeadline != 0,
                 VerificationRequestDeadlineNotStarted()
@@ -694,7 +727,11 @@ contract VehicleSaleEscrow is IERC721Receiver {
                 VerificationRequestDeadlineExpired()
             );
         } else {
-            // Cas 2 : l’acheteur n’a pas répondu.
+            require(
+                disputeReason == DisputeReason.None,
+                InvalidDisputeReason()
+            );
+
             require(confirmCodeDeadline != 0, ConfirmCodeDeadlineNotStarted());
 
             require(
@@ -709,9 +746,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
             );
 
             state = SaleState.Disputed;
+            disputeReason = DisputeReason.BuyerDidNotRespond;
         }
-
-        require(!isVerificationRequested, VerificationAlreadyRequested());
 
         isVerificationRequested = true;
 
@@ -726,84 +762,317 @@ contract VehicleSaleEscrow is IERC721Receiver {
         emit TransferCodeVerificationRequested(seller);
 
         if (oldState != state) {
-            emit BuyerDidNotConfirm(seller);
+            emit BuyerDidNotConfirm(buyer);
             emit WorkflowStateChanged(oldState, state);
         }
     }
 
     function resolveDispute(
-        bytes32 _computedTransferCodeHash
+        VerificationResult _result,
+        bytes calldata _correctedEncryptedTransferCode,
+        bytes32 _verifiedTransferCodeHash
     ) external lock onlyIntermediary {
         require(state == SaleState.Disputed, InvalidSaleState());
-        require(_computedTransferCodeHash != 0, InvalidTransferCodeHash());
+
         require(isVerificationRequested, VerificationNotRequested());
 
-        if (transferCodeHash == _computedTransferCodeHash) {
-            SaleState oldState = SaleState.Disputed;
+        require(disputeReason != DisputeReason.None, InvalidDisputeReason());
 
-            state = SaleState.SaleConfirmed;
-
-            isVehiclePriceFunded = false;
-            isNFTDeposited = false;
-
-            bool successSeller = tokenERC20.transfer(
-                seller,
-                vehiclePrice + verificationFee
-            );
-
-            require(successSeller, TokenTransferFailed(address(this), seller));
-
-            bool successFee = tokenERC20.transfer(
-                intermediary,
-                verificationFee
+        if (_result == VerificationResult.OriginalCodeValid) {
+            require(
+                _verifiedTransferCodeHash != bytes32(0),
+                InvalidTransferCodeHash()
             );
 
             require(
-                successFee,
-                TokenTransferFailed(address(this), intermediary)
+                _verifiedTransferCodeHash == transferCodeHash,
+                InvalidTransferCodeHash()
             );
 
-            vehicleNFT.safeTransferFrom(address(this), buyer, vehicleTokenId);
+            require(
+                _correctedEncryptedTransferCode.length == 0,
+                InvalidEncryptedTransferCode()
+            );
+        } else if (_result == VerificationResult.CorrectedCodeValid) {
+            require(
+                _verifiedTransferCodeHash != bytes32(0),
+                InvalidTransferCodeHash()
+            );
 
-            emit SaleConfirmed(seller, buyer, vehiclePrice, vehicleTokenId);
+            require(
+                _verifiedTransferCodeHash != transferCodeHash,
+                InvalidTransferCodeHash()
+            );
 
-            emit WorkflowStateChanged(oldState, state);
+            require(
+                _correctedEncryptedTransferCode.length > 0,
+                InvalidEncryptedTransferCode()
+            );
+
+            bytes32 previousHash = transferCodeHash;
+
+            transferCodeHash = _verifiedTransferCodeHash;
+            encryptedTransferCode = _correctedEncryptedTransferCode;
+
+            emit TransferCodeCorrected(previousHash, _verifiedTransferCodeHash);
         } else {
-            bool successFee = tokenERC20.transfer(
-                intermediary,
-                verificationFee
-            );
             require(
-                successFee,
-                TokenTransferFailed(address(this), intermediary)
+                _verifiedTransferCodeHash == bytes32(0),
+                InvalidTransferCodeHash()
             );
-            vehicleRecoveryRequired = true;
 
-            _executeEscrowCancellation(intermediary);
+            require(
+                _correctedEncryptedTransferCode.length == 0,
+                InvalidEncryptedTransferCode()
+            );
+
+            _cancelAfterFailedVerification();
+
+            return;
         }
+
+        _completeSaleAfterVerification(_result);
+    }
+
+    function _completeSaleAfterVerification(
+        VerificationResult _result
+    ) internal {
+        SaleState oldState = state;
+        DisputeReason resolvedReason = disputeReason;
+
+        state = SaleState.SaleConfirmed;
+
+        isVehiclePriceFunded = false;
+        isNFTDeposited = false;
+        isVerificationRequested = false;
+
+        disputeReason = DisputeReason.None;
+        verificationRequestDeadline = 0;
+        confirmCodeDeadline = 0;
+
+        _transferToken(seller, vehiclePrice);
+        vehicleNFT.safeTransferFrom(address(this), buyer, vehicleTokenId);
+        _transferToken(intermediary, verificationFee);
+
+        if (_result == VerificationResult.OriginalCodeValid) {
+            _transferToken(seller, verificationFee);
+        } else if (resolvedReason == DisputeReason.CodeRejected) {
+            _transferToken(buyer, verificationFee);
+        } else {
+            uint256 sellerRefund = verificationFee / 2;
+
+            uint256 buyerRefund = verificationFee - sellerRefund;
+
+            _transferToken(buyer, buyerRefund);
+            _transferToken(seller, sellerRefund);
+        }
+
+        emit DisputeResolved(resolvedReason, _result);
+
+        emit SaleConfirmed(seller, buyer, vehiclePrice, vehicleTokenId);
+
+        emit WorkflowStateChanged(oldState, state);
+    }
+
+    function _cancelAfterFailedVerification() internal {
+        DisputeReason resolvedReason = disputeReason;
+
+        require(resolvedReason != DisputeReason.None, InvalidDisputeReason());
+
+        isVerificationRequested = false;
+        disputeReason = DisputeReason.None;
+        verificationRequestDeadline = 0;
+        confirmCodeDeadline = 0;
+
+        _transferToken(intermediary, verificationFee);
+        _transferToken(buyer, verificationFee);
+
+        vehicleRecoveryRequired = true;
+
+        emit DisputeResolved(resolvedReason, VerificationResult.NoValidCode);
+
+        _executeEscrowCancellation(intermediary);
+    }
+
+    function _transferToken(address recipient, uint256 amount) internal {
+        if (amount == 0) {
+            return;
+        }
+
+        bool success = tokenERC20.transfer(recipient, amount);
+        require(success, TokenTransferFailed(address(this), recipient));
+    }
+
+    //GETTERS
+
+    /// @notice Returns the seller address.
+    function getSeller() external view onlyParticipant returns (address) {
+        return seller;
+    }
+
+    /// @notice Returns the buyer address.
+    function getBuyer() external view onlyParticipant returns (address) {
+        return buyer;
+    }
+
+    /// @notice Returns the intermediary address.
+    function getIntermediary() external view onlyParticipant returns (address) {
+        return intermediary;
+    }
+
+    /// @notice Returns the ERC20 token contract.
+    function getTokenERC20Contract()
+        external
+        view
+        onlyParticipant
+        returns (IERC20)
+    {
+        return tokenERC20;
+    }
+
+    /// @notice Returns the vehicle NFT contract.
+    function getVehicleNFTContract()
+        external
+        view
+        onlyParticipant
+        returns (IERC721)
+    {
+        return vehicleNFT;
+    }
+
+    /// @notice Returns the vehicle NFT token ID.
+    function getVehicleTokenId()
+        external
+        view
+        onlyParticipant
+        returns (uint256)
+    {
+        return vehicleTokenId;
+    }
+
+    /// @notice Returns the agreed vehicle sale price.
+    function getVehiclePrice() external view onlyParticipant returns (uint256) {
+        return vehiclePrice;
+    }
+
+    /// @notice Returns the vehicle deposit fee.
+    function getDepositFee() external view onlyParticipant returns (uint256) {
+        return depositFee;
+    }
+
+    /// @notice Returns the vehicle pickup fee.
+    function getPickupFee() external view onlyParticipant returns (uint256) {
+        return pickupFee;
+    }
+
+    /// @notice Returns the transfer code verification fee.
+    function getVerificationFee()
+        external
+        view
+        onlyParticipant
+        returns (uint256)
+    {
+        return verificationFee;
     }
 
     /// @notice Returns the current escrow state.
-    function getSaleState() external view returns (SaleState) {
+    function getSaleState() external view onlyParticipant returns (SaleState) {
         return state;
     }
 
+    /// @notice Returns whether the seller has requested the vehicle deposit.
+    function isDepositRequested() external view onlyParticipant returns (bool) {
+        return depositRequested;
+    }
+
+    /// @notice Returns whether the buyer has requested the vehicle pickup.
+    function isPickupRequested() external view onlyParticipant returns (bool) {
+        return pickupRequested;
+    }
+
+    /// @notice Returns whether the vehicle NFT has been deposited into the escrow.
+    function hasNFTDeposited() external view onlyParticipant returns (bool) {
+        return isNFTDeposited;
+    }
+
+    /// @notice Returns whether the vehicle price has been funded into the escrow.
+    function hasVehiclePriceFunded()
+        external
+        view
+        onlyParticipant
+        returns (bool)
+    {
+        return isVehiclePriceFunded;
+    }
+
+    function isTransferCodeVerified()
+        external
+        view
+        onlyParticipant
+        returns (bool)
+    {
+        return isVerificationRequested;
+    }
+
+    /// @notice Returns whether the seller has requested vehicle recovery.
+    function isVehicleRecoveryRequested()
+        external
+        view
+        onlyParticipant
+        returns (bool)
+    {
+        return recoveryRequested;
+    }
+
     /// @notice Indicates whether the transfer-code deadline is active.
-    function isTransferCodeDeadlineActive() external view returns (bool) {
+    function isTransferCodeDeadlineActive()
+        external
+        view
+        onlyParticipant
+        returns (bool)
+    {
         return
             transferCodeDeadline != 0 &&
             block.timestamp <= transferCodeDeadline;
     }
 
+    /// @notice Indicates whether the confirm-code deadline is active.
+    function isConfirmCodeDeadlineActive()
+        external
+        view
+        onlyParticipant
+        returns (bool)
+    {
+        return
+            confirmCodeDeadline != 0 && block.timestamp <= confirmCodeDeadline;
+    }
+
+    /// @notice Indicates whether the confirm-code deadline is active.
+    function isVerificationCodeDeadlineActive()
+        external
+        view
+        onlyParticipant
+        returns (bool)
+    {
+        return
+            verificationRequestDeadline != 0 &&
+            block.timestamp <= verificationRequestDeadline;
+    }
+
     /// @notice Indicates whether the seller must recover the vehicle.
-    function isVehicleRecoveryRequired() external view returns (bool) {
+    function isVehicleRecoveryRequired()
+        external
+        view
+        onlyParticipant
+        returns (bool)
+    {
         return vehicleRecoveryRequired;
     }
 
     function getEncryptedTransferCode()
         external
         view
-        onlyBuyerOrSeller
+        onlyParticipant
         returns (bytes memory)
     {
         require(encryptedTransferCode.length > 0, TransferCodeNotSubmitted());
@@ -816,8 +1085,16 @@ contract VehicleSaleEscrow is IERC721Receiver {
         onlyParticipant
         returns (bytes32)
     {
-        require(transferCodeHash != 0, TransferCodeHashAlreadySubmitted());
-
+        require(transferCodeHash != 0, TransferCodeHashNotSubmitted());
         return transferCodeHash;
+    }
+
+    function getDisputedReason()
+        external
+        view
+        onlyParticipant
+        returns (DisputeReason)
+    {
+        return disputeReason;
     }
 }

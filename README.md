@@ -424,7 +424,7 @@ Le smart contract :
 
 * rembourse le prix du véhicule à l'acheteur ;
 * rembourse les frais de vérification à l'acheteur ;
-* détruit le NFT représentant le véhicule.
+* Renvoie le NFT représentant le véhicule au vendeur.
 
 Aucune récupération physique n'est nécessaire, puisque le véhicule est toujours en possession du vendeur.
 
@@ -468,7 +468,7 @@ Le vendeur doit alors :
 1. demander officiellement la récupération du véhicule ;
 2. déposer les frais de récupération dans le contrat.
 
-Après la remise du véhicule, l'intermédiaire confirme cette opération sur la blockchain.
+Après la remise du véhicule, l'intermédiaire confirme cette opération sur la blockchain en detruisant le NFT répresentant le vehicule.
 
 Le contrat verse alors les frais de récupération à l'intermédiaire et clôt définitivement cette procédure.
 

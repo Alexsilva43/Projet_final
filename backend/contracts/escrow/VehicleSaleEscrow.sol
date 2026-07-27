@@ -151,6 +151,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
     error PickupAlreadyRequested();
     error PickupNotRequested();
     error BuyerDoesNotOwnNFT();
+    error SellerDoesNotOwnNFT();
     error Locked();
     error NotBuyerOrSeller();
     error CancellationNotAllowed();
@@ -527,9 +528,15 @@ contract VehicleSaleEscrow is IERC721Receiver {
 
         require(recoveryRequested, VehicleRecoveryNotRequested());
 
+        require(
+            vehicleNFT.ownerOf(vehicleTokenId) == seller,
+            SellerDoesNotOwnNFT()
+        );
+
         vehicleRecoveryRequired = false;
         recoveryRequested = false;
 
+        vehicleNFT.burn(vehicleTokenId);
         _transferTokenTo(intermediary, pickupFee);
 
         emit VehicleRecovered(intermediary, seller, vehicleTokenId);
@@ -815,7 +822,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
                 EscrowDoesNotOwnNFT()
             );
 
-            vehicleNFT.burn(vehicleTokenId);
+            vehicleNFT.safeTransferFrom(address(this), seller, vehicleTokenId);
         }
 
         emit WorkflowStateChanged(oldState, state);

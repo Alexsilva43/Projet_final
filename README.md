@@ -39,6 +39,7 @@ Il est notamment responsable de :
 * déposer physiquement le véhicule auprès de l'intermédiaire ;
 * générer le code de cession sur la plateforme ANTS ;
 * transmettre au contrat le code de cession chiffré ainsi que son empreinte cryptographique (*hash*) ;
+* déposer les frais d'annulation avec le NFT ;
 * demander une vérification lorsqu'un litige survient.
 
 ---
@@ -52,8 +53,7 @@ L'acheteur est responsable de :
 * vérifier ce code sur la plateforme ANTS afin de confirmer la cession administrative ;
 * confirmer ou rejeter le code de cession ;
 * demander la récupération du véhicule ;
-* payer les frais de récupération
-* déposer les frais de vérification, qui pourront être remboursés ou redistribués selon l'issue de la procédure de vérification.
+* payer les frais de récupération.
 ---
 
 ### Intermédiaire
@@ -110,9 +110,9 @@ Le protocole prévoit trois catégories de frais :
 
 * les frais de dépôt ;
 * les frais de récupération ;
-* les frais de vérification.
+* les frais d'annulation.
 
-Leur répartition dépend du déroulement de la vente et des éventuels litiges.
+Leur répartition dépend du déroulement de la vente et des éventuelles annulations.
 
 ---
 
@@ -194,7 +194,7 @@ A[Création de l'escrow]
 
 ## 3.1 Création de l'escrow
 
-Une nouvelle instance du contrat **VehicleSaleEscrow** est déployée pour chaque vente.
+Une nouvelle instance du contrat **VehicleSaleEscrow** est déployée par **VehicleSaleFactory** pour chaque vente.
 
 Lors de son déploiement, le contrat est configuré avec l'ensemble des paramètres de la transaction :
 
@@ -211,9 +211,9 @@ Ces informations restent inchangées pendant toute la durée de vie du contrat.
 
 Avant que la vente puisse commencer, les deux participants déposent les actifs numériques nécessaires.
 
-Le vendeur transfère le NFT représentant le véhicule vers le contrat.
+Le vendeur transfère le NFT représentant le véhicule ainsi que les frais d'annulation vers le contrat.
 
-L'acheteur dépose le prix du véhicule ainsi que les frais de vérification.
+L'acheteur dépose uniquement le prix du véhicule.
 
 Une fois ces deux opérations réalisées, le contrat est prêt à poursuivre le processus de vente.
 
@@ -260,7 +260,7 @@ Si le code est valide, il confirme la vente.
 Cette confirmation déclenche automatiquement :
 
 * le paiement du vendeur ;
-* le remboursement des frais de vérification à l'acheteur ;
+
 * le transfert du NFT vers l'acheteur.
 
 Le protocole considère alors la vente comme finalisée sur le plan numérique.
@@ -423,8 +423,8 @@ Cette situation correspond à la phase de préparation de la transaction.
 Le smart contract :
 
 * rembourse le prix du véhicule à l'acheteur ;
-* rembourse les frais de vérification à l'acheteur ;
-* Renvoie le NFT représentant le véhicule au vendeur.
+
+* détruit le NFT représentant le véhicule.
 
 Aucune récupération physique n'est nécessaire, puisque le véhicule est toujours en possession du vendeur.
 
@@ -513,8 +513,8 @@ Les transitions entre ces états sont entièrement contrôlées par le smart con
 | État                | Description                                                                             |
 | ------------------- | --------------------------------------------------------------------------------------- |
 | **Created**         | Le contrat vient d'être déployé. Aucun actif n'a encore été déposé.                     |
-| **Funded**          | Le prix du véhicule ainsi que les frais de vérification ont été déposés par l'acheteur. |
-| **NFTDeposited**    | Le NFT représentant le véhicule a été déposé par le vendeur.                            |
+| **Funded**          | Le prix du véhicule a été déposé par l'acheteur. |
+| **NFTDeposited**    | Le NFT représentant le véhicule ainsi que les frais d'annulation ont été déposés par le vendeur.                            |
 | **AssetsDeposited** | Le paiement et le NFT sont tous les deux conservés par le contrat.                      |
 | **Ready**           | L'intermédiaire a confirmé la réception physique du véhicule.                           |
 | **Submitted**       | Le vendeur a transmis le code de cession chiffré ainsi que son hash.                    |
@@ -621,7 +621,7 @@ Après confirmation de cette remise par l'intermédiaire, le smart contract lui 
 ---
 ### 7.3 Frais de vérification
 
-Les **frais de vérification** couvrent l'intervention de l'intermédiaire lorsqu'un litige nécessite la vérification du code de cession.
+Les **frais d'annulation** couvrent l'intervention de l'intermédiaire lorsqu'un litige nécessite la vérification du code de cession.
 
 Afin de garantir que les fonds nécessaires sont disponibles, l'acheteur dépose une première fois ces frais lors du financement de la vente, en même temps que le prix du véhicule.
 
@@ -631,8 +631,8 @@ Si un litige survient et que le vendeur demande officiellement une vérification
 
 * **Code initial valide** : l'intermédiaire reçoit les frais déposés par l'acheteur, tandis que le vendeur récupère les frais qu'il a avancés.
 * **Code corrigé valide après rejet du code par l'acheteur** : l'intermédiaire reçoit les frais déposés par le vendeur, tandis que l'acheteur récupère les frais qu'il avait avancés.
-* **Code corrigé valide après absence de réponse de l'acheteur** : les frais de vérification sont répartis entre les trois parties. L'intermédiaire reçoit la moitié des frais déposés par le vendeur ainsi que la moitié des frais déposés par l'acheteur. Chaque participant récupère l'autre moitié des frais qu'il avait initialement déposés.
-* **Aucun code valide** : les frais de vérification déposés par le vendeur sont transférés à l'intermédiaire. Les frais de vérification initialement déposés par l'acheteur lui sont remboursés.
+* **Code corrigé valide après absence de réponse de l'acheteur** : les frais d'annulation sont répartis entre les trois parties. L'intermédiaire reçoit la moitié des frais déposés par le vendeur ainsi que la moitié des frais déposés par l'acheteur. Chaque participant récupère l'autre moitié des frais qu'il avait initialement déposés.
+* **Aucun code valide** : les frais d'annulation déposés par le vendeur sont transférés à l'intermédiaire. Les frais d'annulation initialement déposés par l'acheteur lui sont remboursés.
 
 Cette répartition permet de faire supporter le coût de la vérification à la partie responsable du litige. Lorsque cette responsabilité ne peut être clairement attribuée, le coût est partagé entre le vendeur et l'acheteur.
 
@@ -645,7 +645,7 @@ Cette répartition permet de faire supporter le coût de la vérification à la 
 | ------------------------- | -------------------- | ---------------------------------------------- | ------------------------------------------------------ |
 | **Frais de dépôt**        | Vendeur              | Avant la confirmation du dépôt physique        | Intermédiaire                                          |
 | **Frais de récupération** | Acheteur ou vendeur* | Avant la remise ou la récupération du véhicule | Intermédiaire                                          |
-| **Frais de vérification** | Acheteur et vendeur | L’acheteur les dépose lors du financement de la vente ; le vendeur dépose un montant équivalent lorsqu’il demande une vérification | Intermédiaire et/ou remboursement aux parties, selon le résultat de la vérification |
+| **Frais de vérification** | Vendeur | Déposés lors du dépôt du NFT | Intermédiaire et/ou remboursement aux parties, selon le résultat de la vérification |
 
 * L'acheteur paie les frais de récupération lorsque la vente est finalisée. Le vendeur les paie uniquement lorsqu'il doit récupérer son véhicule après une annulation.
 
@@ -665,7 +665,7 @@ Ces fonctions permettent de déposer les actifs numériques nécessaires au dém
 
 | Fonction              | Description                                                                   |
 | --------------------- | ----------------------------------------------------------------------------- |
-| `fundVehiclePrice()`  | Dépose le prix du véhicule ainsi que les frais de vérification de l'acheteur. |
+| `fundVehiclePrice()`  | Dépose le prix du véhicule ainsi que les frais d'annulation de l'acheteur. |
 | `depositVehicleNFT()` | Dépose le NFT représentant le véhicule dans le contrat.                       |
 
 ---
@@ -744,7 +744,7 @@ Le contrat conserve plusieurs catégories d'informations nécessaires au suivi d
 * prix du véhicule ;
 * frais de dépôt ;
 * frais de récupération ;
-* frais de vérification.
+* frais d'annulation.
 
 ### État du protocole
 

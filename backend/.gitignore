@@ -37,3 +37,6 @@ AGENTS.md
 CLAUDE.md
 
 /scripts
+/old
+/node_modules
+/README.pdf

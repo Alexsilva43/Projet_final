@@ -5,7 +5,8 @@ import {VehicleNFT} from "../nft/VehicleNFT.sol";
 import {VehicleSaleEscrow} from "../escrow/VehicleSaleEscrow.sol";
 
 contract VehicleSaleFactory {
-    
+    VehicleNFT public immutable vehicleNFT;
+
     event VehicleSaleCreated(
         address indexed escrow,
         address indexed vehicleNFT,
@@ -16,35 +17,43 @@ contract VehicleSaleFactory {
     );
 
     error InvalidAddress();
-    error InvalidVehiclePrice();
-    error EmptyTokenURI();
+    error InvalidAmount();
+
+    constructor(address _vehicleNFT) {
+        require(_vehicleNFT != address(0), InvalidAddress());
+        require(_vehicleNFT.code.length > 0, InvalidAddress());
+
+        vehicleNFT = VehicleNFT(_vehicleNFT);
+    }
 
     function createVehicleSale(
         address _seller,
         address _buyer,
         address _intermediary,
         address _tokenERC20,
-        uint256 _vehicleTokenId,
         uint256 _vehiclePrice,
         uint256 _depositFee,
         uint256 _pickupFee,
-        uint256 _verificationFee,
-        string calldata _tokenURI
+        uint256 _cancellationFee
     )
         external
         returns (
             address escrowAddress,
-            address vehicleNFTAddress
+            address vehicleNFTAddress,
+            uint256 vehicleTokenId
         )
     {
         require(_seller != address(0), InvalidAddress());
         require(_buyer != address(0), InvalidAddress());
         require(_intermediary != address(0), InvalidAddress());
         require(_tokenERC20 != address(0), InvalidAddress());
-        require(_vehiclePrice > 0, InvalidVehiclePrice());
-        require(bytes(_tokenURI).length > 0, EmptyTokenURI());
 
-        VehicleNFT vehicleNFT = new VehicleNFT(_seller, _buyer);
+        require(_vehiclePrice > 0, InvalidAmount());
+        require(_depositFee > 0, InvalidAmount());
+        require(_pickupFee > 0, InvalidAmount());
+        require(_cancellationFee > 0, InvalidAmount());
+
+        vehicleTokenId = vehicleNFT.mint(_seller);
 
         VehicleSaleEscrow escrow = new VehicleSaleEscrow(
             _seller,
@@ -52,29 +61,28 @@ contract VehicleSaleFactory {
             _intermediary,
             _tokenERC20,
             address(vehicleNFT),
-            _vehicleTokenId,
+            vehicleTokenId,
             _vehiclePrice,
             _depositFee,
             _pickupFee,
-            _verificationFee
+            _cancellationFee
         );
-
-        vehicleNFT.setEscrow(address(escrow));
-
-        vehicleNFT.mint(_seller, _vehicleTokenId, _tokenURI);
 
         escrowAddress = address(escrow);
         vehicleNFTAddress = address(vehicleNFT);
 
-     
+        vehicleNFT.setEscrow(
+            vehicleTokenId,
+            escrowAddress
+        );
+
         emit VehicleSaleCreated(
             escrowAddress,
             vehicleNFTAddress,
             _seller,
             _buyer,
             _intermediary,
-            _vehicleTokenId
+            vehicleTokenId
         );
     }
-
 }

@@ -31,3 +31,13 @@ jobs:
 
       - name: Run tests
         run: npx hardhat test
+
+      - name: Run coverage
+        run: npx hardhat test --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: backend/coverage
+          fail_ci_if_error: true

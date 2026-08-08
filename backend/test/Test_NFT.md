@@ -1,277 +1,460 @@
 # Test_NFT.md
 
-# Documentation des tests de VehicleNFT
+# Documentation des tests -- VehicleNFT
 
-Ce document explique les tests unitaires présents dans `VehicleNFT.ts`. La suite vérifie le comportement personnalisé de `VehicleNFT` : création des NFT, association aux contrats escrow, métadonnées on-chain, restrictions de transfert, destruction des NFT et gestion de plusieurs escrows.
+## Introduction
+
+Ce document décrit les tests unitaires du contrat **VehicleNFT**.
+
+La suite vérifie le comportement spécifique du NFT utilisé dans le système de vente : création des tokens, association avec leur escrow, génération des métadonnées on-chain, restrictions de transfert, destruction des NFT et indépendance entre plusieurs ventes.
+
+Contrairement à un ERC-721 classique, `VehicleNFT` n'est pas destiné à circuler librement entre les utilisateurs. Les tests vérifient donc en particulier que chaque NFT reste lié au workflow de la vente pour laquelle il a été créé.
+
+---
 
 ## Environnement de test
 
-Chaque test commence avec de nouveaux contrats déployés par `setUpVehicleNFTContract()`.
+Chaque test repart d'un environnement propre créé par `setUpVehicleNFTContract()`.
 
-La configuration contient :
+La configuration comprend notamment :
 
-- `owner` : déploie `VehicleNFT` et configure la factory autorisée ;
-- `factory` : déploie les contrats `MockEscrow` utilisés dans les tests ;
-- `mockFactory` : contrat simulant `VehicleSaleFactory`, seul autorisé à appeler `mint()` et `setEscrow()` de `VehicleNFT` ;
-- `seller1` et `buyer1` : vendeur et acheteur associés à `mockEscrow1` ;
-- `seller2` et `buyer2` : vendeur et acheteur associés à `mockEscrow2` ;
-- `other` : compte indépendant utilisé pour tester les actions non autorisées ;
-- `mockEscrow1` et `mockEscrow2` : contrats escrow minimaux capables d'appeler les fonctions de `VehicleNFT`.
+- `owner`, utilisé pour déployer `VehicleNFT` et configurer la factory autorisée ;
+- `mockFactory`, qui simule `VehicleSaleFactory` et permet de tester les appels réservés à la factory ;
+- `seller1` et `buyer1`, associés à une première vente ;
+- `seller2` et `buyer2`, associés à une seconde vente ;
+- `mockEscrow1` et `mockEscrow2`, utilisés pour simuler les opérations qu'un véritable `VehicleSaleEscrow` effectuerait sur le NFT ;
+- `other`, utilisé pour tester les actions effectuées par une adresse non autorisée.
 
-Les mocks sont nécessaires car `VehicleNFT` vérifie l'adresse du contrat escrow à travers `msg.sender`. Le hook `beforeEach` redéploie tous les contrats avant chaque test. Les tests sont donc indépendants les uns des autres.
+Le redéploiement des contrats avant chaque test garantit que les scénarios restent indépendants les uns des autres.
 
-## Déploiement
+---
 
-### Should have the correct name
+# 1. Déploiement
 
-Vérifie que le nom de la collection ERC-721 est `Vehicle NFT` immédiatement après son déploiement.
+## Objectif
 
-### Should have the correct symbol
+Vérifier les propriétés ERC-721 initiales du contrat et confirmer qu'aucun NFT n'existe avant le premier mint.
 
-Vérifie que le symbole de la collection ERC-721 est `VNFT` immédiatement après son déploiement.
+### Test : `Should have the correct name`
 
-### Should start with no existing tokens
+Vérifie que le nom ERC-721 exposé par le contrat est :
 
-Appelle `ownerOf(0)` avant toute création de NFT. L'appel doit échouer avec `ERC721NonexistentToken(0)`, ce qui prouve qu'aucun NFT n'est créé automatiquement au déploiement.
+`Vehicle NFT`
 
-## Création des NFT
+Cela confirme que la collection est correctement initialisée.
 
-### Should prevent a non-factory from minting
+### Test : `Should have the correct symbol`
 
-Le compte `other` essaie d'appeler directement `mint()`. La transaction doit échouer avec `NotTheFactory`, confirmant que seul le contrat factory autorisé peut créer un NFT.
+Vérifie que le symbole ERC-721 est :
 
-### Should mint token 0 to the requested address
+`VNFT`
 
-Le contrat `MockFactory` crée le premier NFT pour `seller1`. Le test vérifie que `seller1` devient propriétaire du token `0`.
+### Test : `Should start with no existing tokens`
 
-### Should increment the token ID
+Vérifie qu'aucun NFT n'est créé automatiquement lors du déploiement.
 
-Le contrat `MockFactory` crée un NFT pour `seller1`, puis un autre pour `seller2`. Le test vérifie que :
+L'appel à `ownerOf(0)` doit échouer avec `ERC721NonexistentToken(0)`, ce qui confirme que le premier token n'existe qu'après un appel explicite à la fonction de mint.
+
+---
+
+# 2. Création des NFT
+
+## Objectif
+
+Vérifier que les NFT ne peuvent être créés que par la factory autorisée et que les identifiants sont attribués correctement.
+
+### Test : `Should prevent a non-factory from minting`
+
+Une adresse extérieure essaie d'appeler directement `mint()`.
+
+L'appel doit échouer avec `NotTheFactory`.
+
+Ce test garantit que la création de nouveaux VehicleNFT passe obligatoirement par la factory configurée.
+
+### Test : `Should mint token 0 to the requested address`
+
+La factory simulée crée le premier NFT pour `seller1`.
+
+Le test vérifie que :
+
+- le premier identifiant attribué est `0` ;
+- `seller1` devient propriétaire de ce token.
+
+### Test : `Should increment the token ID`
+
+Deux NFT sont créés successivement.
+
+Le test vérifie que :
 
 - le token `0` appartient à `seller1` ;
 - le token `1` appartient à `seller2` ;
 - le token `2` n'existe pas encore.
 
-Cela confirme que les identifiants commencent à zéro et sont incrémentés de un après chaque création.
+Cela confirme que les identifiants sont attribués séquentiellement à partir de zéro.
 
-### Should emit a Transfer event
+### Test : `Should emit a Transfer event`
 
-Vérifie l'événement standard ERC-721 émis lors d'un mint. La création du token `0` doit émettre `Transfer` depuis l'adresse zéro vers `seller1`.
+Vérifie le comportement standard ERC-721 lors de la création d'un NFT.
 
-### Should reject minting to the zero address
+Le mint du token `0` doit émettre l'événement `Transfer` :
 
-Le contrat `MockFactory` essaie de créer un NFT pour `address(0)`. La transaction doit échouer avec `InvalidAddress`, empêchant la création d'un NFT sans propriétaire valide.
+- depuis l'adresse zéro ;
+- vers `seller1` ;
+- pour le token `0`.
 
-## Configuration de l'escrow
+### Test : `Should reject minting to the zero address`
 
-### Should allow the factory to configure the escrow
+La factory essaie de créer un NFT pour l'adresse zéro.
 
-Après la création du token `0`, le contrat `MockFactory` l'associe à `mockEscrow1`. Le test appelle `getEscrow(0)` et vérifie que l'adresse enregistrée est correcte.
+L'opération doit échouer avec `InvalidAddress`.
 
-### Should prevent a non-factory from configuring the escrow
+Ce test évite qu'un NFT soit créé sans propriétaire valide.
 
-Le compte `other` essaie d'associer le token `0` à un escrow. La transaction doit échouer avec `NotTheFactory`. Le test vérifie aussi que l'adresse enregistrée reste l'adresse zéro : la transaction échouée n'a donc pas modifié le stockage.
+---
 
-### Should reject the zero escrow address
+# 3. Association d'un NFT à son escrow
 
-Le contrat `MockFactory` essaie d'associer le token `0` à `address(0)`. La transaction doit échouer avec `InvalidAddress`, garantissant que l'escrow configuré possède une adresse valide.
+## Objectif
 
-### Should reject configuring a nonexistent token
+Vérifier qu'un NFT peut être associé à un seul escrow et que cette association ne peut être définie que par la factory.
 
-Seul le token `0` existe, mais le contrat `MockFactory` essaie de configurer le token `1`. La transaction doit échouer avec `ERC721NonexistentToken(1)`, ce qui empêche la création d'une association pour un NFT inexistant.
+Cette relation est essentielle car elle détermine quel escrow sera autorisé à transférer ou détruire le NFT pendant la vente.
 
-### Should reject assigning a second escrow to the same token
+### Test : `Should allow the factory to configure the escrow`
 
-Le contrat `MockFactory` associe d'abord le token `0` à `mockEscrow1`, puis essaie de le réassocier à `mockEscrow2`. La seconde transaction doit échouer avec `TokenAlreadyLinkedToEscrow`. L'association initiale doit rester inchangée.
+Après création du token `0`, la factory l'associe à `mockEscrow1`.
 
-Cela confirme que l'escrow d'un token ne peut pas être remplacé tant que le token existe.
+Le test vérifie que `getEscrow(0)` retourne bien l'adresse de cet escrow.
 
-## Métadonnées
+### Test : `Should prevent a non-factory from configuring the escrow`
 
-### Should return a Base64 JSON token URI
+Une adresse non autorisée tente d'associer le token `0` à un escrow.
 
-Crée le token `0`, puis récupère son `tokenURI`. Le test vérifie que :
+Le test vérifie que :
 
-- le résultat est une chaîne de caractères ;
-- il commence par `data:application/json;base64,` ;
-- le contenu restant utilise un encodage Base64 valide ;
-- le décodage produit un JSON valide.
+- l'appel échoue avec `NotTheFactory` ;
+- aucune association n'est enregistrée après l'échec.
 
-Cela confirme que les métadonnées sont générées entièrement on-chain sous forme de data URI.
+### Test : `Should reject the zero escrow address`
 
-### Should contain the correct NFT name
+La factory tente d'associer un NFT à l'adresse zéro.
 
-Décode les métadonnées JSON du token `0` et vérifie que le champ `name` contient `Vehicle NFT: 0`.
+L'opération doit échouer avec `InvalidAddress`.
 
-### Should contain a Base64 SVG image
+Le contrat empêche ainsi la création d'une association inutilisable.
 
-Décode les métadonnées JSON et vérifie le champ `image`. Sa valeur doit commencer par `data:image/svg+xml;base64,` et être suivie d'un contenu Base64 valide.
+### Test : `Should reject configuring a nonexistent token`
 
-### Should display the correct token ID in the SVG
+La factory tente de configurer l'escrow du token `1` alors que seul le token `0` existe.
 
-Décode les deux niveaux de métadonnées : d'abord le JSON, puis le SVG intégré. Le SVG obtenu doit contenir `TOKEN: 0`, prouvant que l'image affiche l'identifiant du NFT demandé.
+L'appel doit échouer avec `ERC721NonexistentToken(1)`.
 
-### Should generate different metadata for different token IDs
+Aucune association ne peut donc être créée pour un NFT inexistant.
 
-Crée les tokens `0` et `1`, puis décode leurs métadonnées. Le test vérifie que :
+### Test : `Should reject assigning a second escrow to the same token`
 
-- leurs noms sont respectivement `Vehicle NFT: 0` et `Vehicle NFT: 1` ;
-- leurs images SVG encodées sont différentes.
+Le token `0` est d'abord associé à `mockEscrow1`.
 
-Cela prouve que les métadonnées contiennent des informations propres à chaque token, même si tous les NFT utilisent le même visuel général.
+La factory tente ensuite de remplacer cette association par `mockEscrow2`.
 
-### Should reject tokenURI for a nonexistent token
+L'opération doit échouer avec `TokenAlreadyLinkedToEscrow`, et l'association avec `mockEscrow1` doit rester inchangée.
 
-Appelle `tokenURI(0)` sans avoir créé le token `0`. L'appel doit échouer avec `ERC721NonexistentToken(0)`, garantissant que les métadonnées sont disponibles uniquement pour les NFT existants.
+Ce test garantit qu'un NFT reste lié à la vente pour laquelle il a été créé.
 
-## Transferts effectués par le vendeur
+---
 
-Le vendeur ne peut pas envoyer directement le NFT. Il doit autoriser l'escrow configuré, puis cet escrow doit récupérer lui-même le NFT.
+# 4. Métadonnées on-chain
 
-### Should reject a transfer before escrow configuration
+## Objectif
 
-Le vendeur essaie de transférer le token `0` à `mockEscrow1` avant que cet escrow soit associé au token. La transaction doit échouer avec `NFTTransferNotAllowed`.
+Vérifier que les métadonnées du NFT sont générées entièrement on-chain et qu'elles contiennent les informations correspondant au token demandé.
 
-### Should reject a direct transfer from the seller to the escrow
+### Test : `Should return a Base64 JSON token URI`
 
-Après l'association de `mockEscrow1` au token `0`, le vendeur appelle directement `safeTransferFrom`. La transaction doit toujours échouer avec `NFTTransferNotAllowed`, et le vendeur doit rester propriétaire.
+Le token `0` est créé puis son `tokenURI` est récupéré.
 
-Choisir le bon destinataire n'est donc pas suffisant : l'escrow associé doit également être l'appelant qui exécute le transfert.
+Le test vérifie que :
 
-### Should allow the escrow to pull an approved NFT from the seller
+- la valeur retournée est une chaîne de caractères ;
+- elle utilise le préfixe `data:application/json;base64,` ;
+- la partie Base64 peut être décodée ;
+- le résultat constitue un JSON valide.
 
-Le vendeur autorise `mockEscrow1` à gérer le token `0`. Le mock appelle ensuite `safeTransferFrom` pour récupérer le NFT du vendeur et le transférer vers sa propre adresse. Le test vérifie que l'escrow devient propriétaire.
+Cela confirme que les métadonnées ne dépendent pas d'un serveur ou d'une URL externe.
 
-Cela représente le dépôt valide du NFT dans l'escrow.
+### Test : `Should contain the correct NFT name`
 
-### Should reject a seller transfer to another address
+Après décodage du JSON, le champ `name` doit contenir :
 
-Le vendeur essaie de transférer directement le token `0` à l'acheteur sans passer par l'escrow. La transaction doit échouer avec `NFTTransferNotAllowed`.
+`Vehicle NFT: 0`
 
-## Transferts effectués par l'escrow
+Le nom des métadonnées reflète donc l'identifiant du token.
 
-Une fois propriétaire du NFT, l'escrow peut le rendre au vendeur configuré ou le remettre à l'acheteur configuré. Il ne peut pas l'envoyer à une adresse indépendante.
+### Test : `Should contain a Base64 SVG image`
 
-### Should allow the escrow to transfer the NFT to the seller
+Le champ `image` du JSON doit être une image SVG elle-même intégrée sous forme de data URI Base64.
 
-Le test dépose d'abord le token `0` dans `mockEscrow1`. L'escrow le retransfère ensuite à `seller1`. La vérification finale confirme que le vendeur a récupéré le NFT.
+Le test vérifie le préfixe :
 
-Cela représente notamment la restitution du NFT après l'annulation d'une vente.
+`data:image/svg+xml;base64,`
 
-### Should allow the escrow to transfer the NFT to the buyer
+ainsi que la validité du contenu encodé.
 
-Le test dépose le token `0` dans `mockEscrow1`, puis le transfère de l'escrow vers `buyer1`. Il vérifie :
+### Test : `Should display the correct token ID in the SVG`
 
-- l'événement `Transfer` de l'escrow vers l'acheteur ;
-- que l'acheteur est finalement propriétaire du token `0`.
+Le JSON puis l'image SVG sont décodés.
 
-Cela représente la remise du NFT à l'acheteur après la validation de la vente.
+Le SVG doit contenir :
 
-### Should reject an escrow transfer to another address
+`TOKEN: 0`
 
-Après avoir reçu le token `0`, l'escrow essaie de l'envoyer au compte `other`. La transaction doit échouer avec `NFTTransferNotAllowed`, et l'escrow doit rester propriétaire.
+Le test vérifie ainsi que l'image générée correspond au NFT consulté.
 
-## Transferts effectués par l'acheteur
+### Test : `Should generate different metadata for different token IDs`
 
-### Should reject every transfer from the buyer
+Deux NFT sont créés.
 
-Le test exécute le parcours valide vendeur → escrow → acheteur. Une fois propriétaire du token `0`, `buyer1` essaie de le transférer :
+Le test vérifie que :
 
-- à une adresse indépendante ;
-- à l'escrow ;
-- au vendeur d'origine.
+- leurs noms contiennent respectivement les identifiants `0` et `1` ;
+- leurs images encodées sont différentes.
 
-Chaque tentative doit échouer avec `NFTTransferNotAllowed`, et l'acheteur doit rester propriétaire. Le NFT devient donc non transférable après sa remise à l'acheteur.
+Même si la structure graphique reste commune, les métadonnées restent propres à chaque token.
 
-## Destruction du NFT
+### Test : `Should reject tokenURI for a nonexistent token`
 
-La fonction `burn` est contrôlée par l'escrow associé à chaque token. Cet escrow peut détruire le NFT quel que soit son propriétaire actuel, car `burn` utilise l'opération interne de destruction ERC-721 et non un transfert nécessitant l'autorisation du propriétaire.
+Un `tokenURI` est demandé pour un token qui n'existe pas.
 
-### Should allow the associated escrow to burn the NFT
+L'appel doit échouer avec `ERC721NonexistentToken`.
 
-Après l'association du token `0` à `mockEscrow1`, cet escrow le détruit. Le test vérifie :
+Ce test garantit qu'aucune métadonnée n'est retournée pour un NFT inexistant ou déjà détruit.
 
-- l'émission de `Transfer` depuis le propriétaire actuel vers l'adresse zéro ;
-- que `ownerOf(0)` échoue ensuite avec `ERC721NonexistentToken(0)`.
+---
 
-Cela confirme que l'escrow associé peut détruire le token et que celui-ci n'existe plus après l'opération.
+# 5. Transferts depuis le vendeur
 
-### Should reject a burn by the seller
+## Objectif
 
-Le vendeur appelle directement `burn(0)`. La transaction doit échouer avec `NotTheEscrow`, et le vendeur doit rester propriétaire.
+Vérifier que le vendeur ne peut pas librement transférer le NFT.
 
-### Should reject a burn by the buyer
+Le dépôt valide suit un mécanisme précis : le vendeur autorise l'escrow associé, puis cet escrow récupère lui-même le NFT.
 
-Le test transfère d'abord le token `0` à `buyer1` en passant par l'escrow. Même si l'acheteur possède le NFT, son appel direct à `burn(0)` doit échouer avec `NotTheEscrow`. Il doit rester propriétaire après cet échec.
+### Test : `Should reject a transfer before escrow configuration`
 
-La propriété du NFT ne donne donc pas l'autorisation de le détruire.
+Le vendeur essaie de transférer le NFT avant qu'un escrow lui soit associé.
 
-### Should reject a burn by another escrow
+L'opération doit échouer avec `NFTTransferNotAllowed`.
 
-Le token `0` est associé à `mockEscrow1`, mais `mockEscrow2` essaie de le détruire. La transaction doit échouer avec `NotTheEscrow`, et `seller1` doit rester propriétaire.
+Un NFT ne peut donc pas circuler avant d'avoir été rattaché à sa vente.
 
-Cela prouve que l'autorisation de destruction est propre à l'escrow enregistré pour chaque token et n'est pas accordée globalement à tous les escrows.
+### Test : `Should reject a direct transfer from the seller to the escrow`
 
-### Should clear the associated escrow after the burn
+Même après association de l'escrow, le vendeur essaie d'exécuter lui-même le transfert vers cet escrow.
 
-Après la destruction du token `0` par `mockEscrow1`, `getEscrow(0)` doit retourner l'adresse zéro. Ce test vérifie le nettoyage personnalisé du mapping `vehicleEscrow`.
+Le transfert doit échouer et le vendeur doit rester propriétaire.
 
-### Should not reuse a burned token ID
+Ce test vérifie que le simple fait d'utiliser la bonne destination n'est pas suffisant : le transfert doit être exécuté par l'escrow associé.
 
-Le contrat `MockFactory` crée le token `0`, qui est ensuite détruit par son escrow. Le mint suivant doit créer le token `1` pour `seller2`, tandis que le token `0` reste inexistant.
+### Test : `Should allow the escrow to pull an approved NFT from the seller`
 
-Cela confirme que la destruction d'un token ne diminue pas et ne réinitialise pas le compteur d'identifiants.
+Le vendeur autorise l'escrow à gérer son NFT.
 
-## Gestion de plusieurs escrows
+L'escrow récupère ensuite le token et devient propriétaire.
 
-### Should associate each token with its own escrow
+Ce test reproduit le dépôt normal du NFT dans `VehicleSaleEscrow`.
 
-Le contrat `MockFactory` crée deux NFT et associe :
+### Test : `Should reject a seller transfer to another address`
 
-- le token `0` à `mockEscrow1` ;
-- le token `1` à `mockEscrow2`.
+Le vendeur tente d'envoyer directement le NFT à une autre adresse, notamment l'acheteur.
 
-Le test lit les deux valeurs et confirme que les associations sont enregistrées séparément pour chaque token.
+Le transfert doit échouer avec `NFTTransferNotAllowed`.
 
-### Should reject an escrow acting on another escrow's token
+Le vendeur ne peut donc pas contourner l'escrow pour remettre directement le NFT à l'acheteur.
 
-Après l'association du token `0` à `mockEscrow1` et du token `1` à `mockEscrow2`, `mockEscrow1` essaie de détruire le token `1`. La transaction doit échouer avec `NotTheEscrow`, et `seller2` doit rester propriétaire du token `1`.
+---
 
-Cela vérifie que l'autorité d'un escrow est limitée à son propre token.
+# 6. Transferts depuis l'escrow
 
-### Should not affect token 1 when token 0 is burned
+## Objectif
 
-Le test crée deux tokens configurés indépendamment, puis détruit le token `0` avec `mockEscrow1`. Il vérifie ensuite que :
+Vérifier que l'escrow associé peut transférer le NFT uniquement vers les deux destinations prévues par le workflow :
 
-- le token `1` existe toujours et appartient encore à `seller2` ;
-- le token `1` reste associé à `mockEscrow2` ;
-- le token `0` n'existe plus.
+- le vendeur ;
+- l'acheteur.
 
-Cela confirme que la destruction d'un NFT et la suppression de son escrow n'affectent ni la propriété ni la configuration d'un autre NFT.
+### Test : `Should allow the escrow to transfer the NFT to the seller`
 
-## Résumé de la couverture
+Le NFT est d'abord déposé dans `mockEscrow1`, puis l'escrow le retourne à `seller1`.
 
-La suite contient 36 tests :
+Le test vérifie que le vendeur redevient propriétaire.
 
-| Section | Tests | Comportement principal vérifié |
+Ce scénario correspond notamment au retour du NFT lors d'une annulation effectuée après le dépôt physique du véhicule.
+
+### Test : `Should allow the escrow to transfer the NFT to the buyer`
+
+Après avoir reçu le NFT, l'escrow le transfère à `buyer1`.
+
+Le test vérifie :
+
+- l'émission de l'événement ERC-721 `Transfer` ;
+- la nouvelle propriété du NFT.
+
+Ce scénario représente le transfert du NFT après confirmation de la vente.
+
+### Test : `Should reject an escrow transfer to another address`
+
+L'escrow tente d'envoyer le NFT à une adresse qui n'est ni le vendeur ni l'acheteur associés.
+
+L'opération doit échouer avec `NFTTransferNotAllowed` et l'escrow doit rester propriétaire.
+
+---
+
+# 7. Transferts depuis l'acheteur
+
+## Objectif
+
+Vérifier que le NFT devient non transférable une fois remis à l'acheteur.
+
+### Test : `Should reject every transfer from the buyer`
+
+Le test reproduit d'abord le parcours autorisé :
+
+`vendeur -> escrow -> acheteur`
+
+Une fois propriétaire, l'acheteur tente de transférer le NFT :
+
+- vers une adresse indépendante ;
+- vers l'escrow ;
+- vers le vendeur.
+
+Toutes les tentatives doivent échouer avec `NFTTransferNotAllowed`.
+
+Le test confirme donc qu'après la confirmation de la vente, l'acheteur peut détenir le NFT mais ne peut pas le faire circuler. Sa prochaine étape normale est sa destruction lorsque la remise physique du véhicule est confirmée.
+
+---
+
+# 8. Destruction du NFT
+
+## Objectif
+
+Vérifier que seul l'escrow associé au token peut détruire le NFT et que cette destruction fonctionne indépendamment de l'adresse qui détient actuellement le token.
+
+Cette propriété est notamment importante lorsqu'une vente est annulée avant que le NFT ait été déposé dans l'escrow : l'escrow doit pouvoir détruire le NFT encore présent dans le wallet du vendeur.
+
+### Test : `Should allow the associated escrow to burn the NFT`
+
+Le token `0` est associé à `mockEscrow1`, puis cet escrow le détruit.
+
+Le test vérifie :
+
+- l'événement `Transfer` du propriétaire actuel vers l'adresse zéro ;
+- l'inexistence du token après le burn.
+
+L'autorisation dépend donc de l'escrow associé au token et non de la propriété actuelle du NFT.
+
+### Test : `Should reject a burn by the seller`
+
+Le vendeur tente de détruire directement son NFT.
+
+L'appel doit échouer avec `NotTheEscrow` et le vendeur reste propriétaire.
+
+### Test : `Should reject a burn by the buyer`
+
+Le NFT est d'abord transféré à l'acheteur via l'escrow.
+
+L'acheteur tente ensuite de le détruire lui-même.
+
+L'appel doit échouer avec `NotTheEscrow`.
+
+Le fait d'être propriétaire du NFT ne donne donc pas l'autorisation d'appeler `burn()`.
+
+### Test : `Should reject a burn by another escrow`
+
+Le token `0` est associé à `mockEscrow1`, tandis que `mockEscrow2` tente de le détruire.
+
+L'appel doit échouer avec `NotTheEscrow`.
+
+Chaque escrow possède donc une autorité limitée aux tokens qui lui sont explicitement associés.
+
+### Test : `Should clear the associated escrow after the burn`
+
+Après destruction du token, `getEscrow(0)` doit retourner l'adresse zéro.
+
+Le test vérifie ainsi que la relation entre le NFT et son escrow est supprimée avec le token.
+
+### Test : `Should not reuse a burned token ID`
+
+Le token `0` est créé puis détruit.
+
+Le NFT créé ensuite doit recevoir l'identifiant `1`.
+
+Le contrat ne réutilise donc jamais l'identifiant d'un token détruit, ce qui préserve l'unicité historique des identifiants.
+
+---
+
+# 9. Gestion de plusieurs escrows
+
+## Objectif
+
+Vérifier que plusieurs ventes peuvent utiliser le même contrat `VehicleNFT` sans que les associations ou autorisations d'un token affectent les autres.
+
+### Test : `Should associate each token with its own escrow`
+
+Deux NFT sont créés puis associés à deux escrows différents :
+
+- token `0` -> `mockEscrow1` ;
+- token `1` -> `mockEscrow2`.
+
+Le test vérifie que les deux associations sont stockées indépendamment.
+
+### Test : `Should reject an escrow acting on another escrow's token`
+
+`mockEscrow1` tente d'agir sur un token associé à `mockEscrow2`.
+
+L'opération doit échouer avec `NotTheEscrow` et le propriétaire du second token doit rester inchangé.
+
+Ce test confirme que l'autorisation d'un escrow n'est jamais globale.
+
+### Test : `Should not affect token 1 when token 0 is burned`
+
+Deux tokens sont configurés indépendamment.
+
+Après destruction du token `0`, le test vérifie que :
+
+- le token `0` n'existe plus ;
+- le token `1` existe toujours ;
+- le token `1` appartient toujours à `seller2` ;
+- son association avec `mockEscrow2` est toujours présente.
+
+La destruction d'un NFT et le nettoyage de son association n'ont donc aucun effet sur une autre vente.
+
+---
+
+# 10. Résumé de la couverture
+
+La suite contient **36 tests** répartis comme suit :
+
+| Section | Nombre de tests | Comportement principal vérifié |
 | --- | ---: | --- |
 | Déploiement | 3 | Configuration ERC-721 initiale et absence de tokens |
-| Création des NFT | 5 | Autorisation de la factory, propriété, identifiants, événement et validation d'adresse |
-| Configuration de l'escrow | 5 | Autorisation de la factory, validation et association unique |
-| Métadonnées | 6 | JSON Base64, SVG intégré, contenu propre au token et tokens inexistants |
-| Transferts du vendeur | 4 | Configuration et récupération du NFT par l'escrow autorisé |
-| Transferts de l'escrow | 3 | Transfert uniquement vers le vendeur ou l'acheteur |
-| Transferts de l'acheteur | 1 | Blocage définitif des transferts après réception |
-| Destruction | 6 | Autorisation par token, nettoyage et non-réutilisation des identifiants |
-| Plusieurs escrows | 3 | Indépendance des configurations, autorisations et états |
+| Création des NFT | 5 | Autorisation de la factory, propriété, identifiants et mint |
+| Association à l'escrow | 5 | Configuration unique et contrôle de la factory |
+| Métadonnées | 6 | JSON Base64, SVG on-chain et données propres au token |
+| Transferts depuis le vendeur | 4 | Dépôt uniquement via l'escrow autorisé |
+| Transferts depuis l'escrow | 3 | Transfert uniquement vers vendeur ou acheteur |
+| Transferts depuis l'acheteur | 1 | Blocage des transferts après réception |
+| Destruction | 6 | Autorisation de l'escrow, nettoyage et identifiants |
+| Plusieurs escrows | 3 | Indépendance des ventes et des autorisations |
 | **Total** | **36** | |
 
-Ensemble, ces tests vérifient le cycle de vie prévu du NFT :
+---
 
-1. Le contrat factory autorisé crée le NFT pour le vendeur.
-2. Le contrat factory autorisé associe un escrow au token.
-3. Le vendeur autorise cet escrow.
-4. L'escrow récupère le NFT du vendeur.
-5. L'escrow peut rendre le NFT au vendeur ou le remettre à l'acheteur.
-6. L'acheteur ne peut plus transférer le NFT.
-7. Seul l'escrow associé au token peut le détruire.
+# Conclusion
+
+Les tests vérifient le cycle de vie complet prévu pour un `VehicleNFT`.
+
+Un NFT est créé par la factory pour le vendeur puis associé à l'escrow de sa vente. À partir de cette association, ses mouvements sont strictement contrôlés : le vendeur ne peut pas le transférer librement, l'escrow peut le récupérer puis le remettre uniquement au vendeur ou à l'acheteur, et l'acheteur ne peut pas le transférer après réception.
+
+La destruction suit la même logique d'autorisation : seul l'escrow associé peut supprimer le NFT, même lorsque celui-ci est encore détenu par le vendeur ou a déjà été remis à l'acheteur.
+
+Enfin, les tests multi-escrows vérifient que plusieurs ventes peuvent partager le même contrat `VehicleNFT` tout en conservant des associations, des autorisations et des cycles de vie complètement indépendants.

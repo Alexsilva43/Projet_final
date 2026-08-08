@@ -594,6 +594,17 @@ describe("VehicleSaleEscrow", function () {
                 .withArgs(vehicleTokenId);
         });
 
+        it("Should burn the NFT from the seller wallet when cancelled before NFT deposit", async function () {
+            await vehicleSaleEscrow.connect(buyer).fundVehiclePrice();
+            expect(await vehicleNFT.ownerOf(vehicleTokenId)).to.equal(seller.address);
+            await vehicleSaleEscrow.connect(buyer).cancelBeforeVehicleDeposit();
+            expect(await vehicleSaleEscrow.getSaleState()).to.equal(8n);
+            expect(await mockTokenERC20.balanceOf(buyer.address)).to.equal(vehiclePrice + cancellationFee + pickupFee);
+            await expect(vehicleNFT.ownerOf(vehicleTokenId))
+                .to.be.revertedWithCustomError(vehicleNFT, "ERC721NonexistentToken")
+                .withArgs(vehicleTokenId);
+        });
+
         it("Should reject cancellation before the transfer code deadline expires", async function () {
             await reachReadyState();
             const deadline = await vehicleSaleEscrow.getTransferCodeDeadline();

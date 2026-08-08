@@ -427,11 +427,13 @@ contract VehicleSaleEscrow is IERC721Receiver {
             _transferTokenTo(buyer, vehiclePrice + cancellationFee);
         }
         if (isNFTDeposited) {
+            require(vehicleNFT.ownerOf(vehicleTokenId) == address(this),InvalidNFT());
             isNFTDeposited = false;
             _transferTokenTo(seller, cancellationFee);
-            require(vehicleNFT.ownerOf(vehicleTokenId) == address(this), InvalidNFT());
-            vehicleNFT.burn(vehicleTokenId);
+        } else {
+            require(vehicleNFT.ownerOf(vehicleTokenId) == seller, InvalidNFT());
         }
+        vehicleNFT.burn(vehicleTokenId);
         emit WorkflowStateChanged(oldState, state);
         emit EscrowSaleCancelled(msg.sender);
     }

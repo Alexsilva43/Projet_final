@@ -42,7 +42,7 @@ async function setUpVehicleSaleEscrowContract() {
         factory
     );
 
-    await mockFactory.setVehicleEscrow(await vehicleNFT.getAddress(),  vehicleTokenId, await vehicleSaleEscrow.getAddress());
+    await mockFactory.setVehicleEscrow(await vehicleNFT.getAddress(), vehicleTokenId, await vehicleSaleEscrow.getAddress());
     await vehicleNFT.connect(seller).approve(await vehicleSaleEscrow.getAddress(), vehicleTokenId);
     await mockTokenERC20.mint(buyer.address, vehiclePrice + cancellationFee + pickupFee);
     await mockTokenERC20.mint(seller.address, depositFee + cancellationFee);
@@ -560,7 +560,7 @@ describe("VehicleSaleEscrow", function () {
     });
 
     describe("Cancellation", function () {
-        it("Should allow the buyer to cancel before the physical vehicle deposit is requested", async function () {
+        it("Should allow the buyer to cancel before the physical vehicle deposit is confirmed", async function () {
             await reachAssetsDepositedState();
             await expect(vehicleSaleEscrow.connect(buyer).cancelBeforeVehicleDeposit())
                 .to.emit(vehicleSaleEscrow, "EscrowSaleCancelled")
@@ -570,7 +570,7 @@ describe("VehicleSaleEscrow", function () {
             expect(await vehicleSaleEscrow.getSaleState()).to.equal(8n);
         });
 
-        it("Should allow the seller to cancel before the physical vehicle deposit is requested", async function () {
+        it("Should allow the seller to cancel before the physical vehicle deposit is confirmed", async function () {
             await reachAssetsDepositedState();
             await expect(vehicleSaleEscrow.connect(seller).cancelBeforeVehicleDeposit())
                 .to.emit(vehicleSaleEscrow, "EscrowSaleCancelled")
@@ -583,15 +583,19 @@ describe("VehicleSaleEscrow", function () {
         it("Should refund deposited funds and burn the NFT during early cancellation", async function () {
             const escrowAddress = await vehicleSaleEscrow.getAddress();
             await reachAssetsDepositedState();
+            await vehicleSaleEscrow.connect(seller).requestVehicleDeposit();
+            expect(await vehicleSaleEscrow.isDepositRequested()).to.equal(true);
+            expect(await mockTokenERC20.balanceOf(escrowAddress)).to.equal(vehiclePrice + cancellationFee * 2n + depositFee);
+            expect(await mockTokenERC20.balanceOf(seller.address)).to.equal(0n);
             await vehicleSaleEscrow.connect(seller).cancelBeforeVehicleDeposit();
+            expect(await vehicleSaleEscrow.getSaleState()).to.equal(8n);
+            expect(await vehicleSaleEscrow.isDepositRequested()).to.equal(false);
+            expect(await vehicleSaleEscrow.hasVehiclePriceFunded()).to.equal(false);
+            expect(await vehicleSaleEscrow.hasNFTBeenDeposited()).to.equal(false);
             expect(await mockTokenERC20.balanceOf(buyer.address)).to.equal(vehiclePrice + cancellationFee + pickupFee);
             expect(await mockTokenERC20.balanceOf(seller.address)).to.equal(depositFee + cancellationFee);
             expect(await mockTokenERC20.balanceOf(escrowAddress)).to.equal(0n);
-            expect(await vehicleSaleEscrow.hasVehiclePriceFunded()).to.equal(false);
-            expect(await vehicleSaleEscrow.hasNFTBeenDeposited()).to.equal(false);
-            await expect(vehicleNFT.ownerOf(vehicleTokenId))
-                .to.be.revertedWithCustomError(vehicleNFT, "ERC721NonexistentToken")
-                .withArgs(vehicleTokenId);
+            await expect(vehicleNFT.ownerOf(vehicleTokenId)).to.be.revertedWithCustomError(vehicleNFT, "ERC721NonexistentToken").withArgs(vehicleTokenId);
         });
 
         it("Should burn the NFT from the seller wallet when cancelled before NFT deposit", async function () {

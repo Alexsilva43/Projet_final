@@ -286,23 +286,28 @@ Le test contrôle que :
 
 Vérifier les différents scénarios d'annulation avant et après le dépôt physique du véhicule.
 
-### Test : `Should allow the buyer to cancel before the physical vehicle deposit is requested`
+### Test : `Should allow the buyer to cancel before the physical vehicle deposit is confirmed`
 
 Vérifie qu'une annulation anticipée peut être demandée par l'acheteur et qu'elle entraîne la transition vers `Cancelled`.
 
-### Test : `Should allow the seller to cancel before the physical vehicle deposit is requested`
+### Test : `Should allow the seller to cancel before the physical vehicle deposit is confirmed`
 
 Vérifie le même droit d'annulation anticipée pour le vendeur.
 
 ### Test : `Should refund deposited funds and burn the NFT during early cancellation`
 
-Vérifie le cas où les deux parties ont déjà effectué leurs dépôts :
+Vérifie le cas où les deux parties ont déjà effectué leurs dépôts et où le vendeur a également demandé le dépôt physique du véhicule en versant `depositFee`, mais où l'intermédiaire n'a pas encore confirmé la réception du véhicule.
 
-- l'acheteur récupère le prix et ses frais d'annulation ;
-- le vendeur récupère ses frais d'annulation ;
+Le test vérifie que :
+
+- l'annulation reste possible avant la confirmation de l'intermédiaire ;
+- l'acheteur récupère le prix du véhicule et son `cancellationFee` ;
+- le vendeur récupère son `cancellationFee` ainsi que le `depositFee` déjà versé ;
+- la demande de dépôt est réinitialisée ;
+- les indicateurs de dépôt des actifs sont réinitialisés ;
 - l'escrow ne conserve plus de fonds ;
-- les indicateurs de dépôt sont réinitialisés ;
-- le NFT détenu par l'escrow est détruit.
+- le NFT détenu par l'escrow est détruit ;
+- l'état devient `Cancelled`.
 
 ### Test : `Should burn the NFT from the seller wallet when cancelled before NFT deposit`
 

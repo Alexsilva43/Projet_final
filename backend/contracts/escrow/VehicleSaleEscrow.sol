@@ -420,7 +420,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
             state == SaleState.Funded ||
             state == SaleState.NFTDeposited ||
             state == SaleState.AssetsDeposited;
-        require(!depositRequested && cancellableState, InvalidState());
+        require(cancellableState, InvalidState());
         state = SaleState.Cancelled;
         if (isVehiclePriceFunded) {
             isVehiclePriceFunded = false;
@@ -433,6 +433,10 @@ contract VehicleSaleEscrow is IERC721Receiver {
         } else {
             require(vehicleNFT.ownerOf(vehicleTokenId) == seller, InvalidNFT());
         }
+        if (depositRequested) {
+            depositRequested = false;
+        _transferTokenTo(seller, depositFee);
+    }
         vehicleNFT.burn(vehicleTokenId);
         emit WorkflowStateChanged(oldState, state);
         emit EscrowSaleCancelled(msg.sender);

@@ -47,7 +47,7 @@ contract VehicleNFT is ERC721 {
         require(to != address(0), InvalidAddress());
         uint256 tokenId = nextTokenId;
         nextTokenId++;
-        _safeMint(to, tokenId);
+        _mint(to, tokenId);
         return tokenId;
     }
 

@@ -289,7 +289,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
         isNFTDeposited = false;
         _transferTokenTo(seller, vehiclePrice + cancellationFee);
         _transferTokenTo(buyer, cancellationFee);
-        vehicleNFT.safeTransferFrom(address(this), buyer, vehicleTokenId);
+        vehicleNFT.transferFrom(address(this), buyer, vehicleTokenId);
         emit SaleConfirmed(seller, buyer, vehiclePrice, vehicleTokenId);
         emit WorkflowStateChanged(oldState, state);
     }
@@ -497,7 +497,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
         if (isNFTDeposited) {
             isNFTDeposited = false;
             require(vehicleNFT.ownerOf(vehicleTokenId) == address(this), InvalidNFT());
-            vehicleNFT.safeTransferFrom(address(this), seller, vehicleTokenId);
+            vehicleNFT.transferFrom(address(this), seller, vehicleTokenId);
         }
         emit WorkflowStateChanged(oldState, state);
         emit EscrowSaleCancelled(cancelledBy);
@@ -512,7 +512,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
         isVerificationRequested = false;
         disputeReason = DisputeReason.None;
         _transferTokenTo(seller, vehiclePrice);
-        vehicleNFT.safeTransferFrom(address(this), buyer, vehicleTokenId);
+        vehicleNFT.transferFrom(address(this), buyer, vehicleTokenId);
         _transferTokenTo(intermediary, cancellationFee);
         if (_result == VerificationResult.OriginalCodeValid) {
             _transferTokenTo(seller, cancellationFee);

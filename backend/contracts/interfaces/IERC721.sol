@@ -8,6 +8,12 @@ interface IERC721 {
         uint256 tokenId
     ) external;
 
+    function transferFrom(
+        address from,
+        address to,
+        uint256 tokenId
+    ) external;
+
     function mint(address to, uint256 tokenId, string calldata _tokenURI) external;
     function burn (uint256 tokenId) external;
     function ownerOf(uint256 tokenId) external view returns (address owner);

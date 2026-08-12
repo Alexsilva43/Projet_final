@@ -13,11 +13,11 @@ contract VehicleSaleFactory {
     address public immutable tokenERC20;
 
     event VehicleSaleCreated(
-        address indexed escrow,
-        address indexed vehicleNFT,
-        address seller,
-        address buyer,
-        address intermediary,
+        address escrow,
+        address vehicleNFT,
+        address indexed seller,
+        address indexed buyer,
+        address indexed intermediary,
         uint256 vehicleTokenId
     );
 

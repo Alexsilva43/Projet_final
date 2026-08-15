@@ -17,20 +17,27 @@ function shortenAddress(address?: string) {
 function getSaleIndicator(state: number) {
     if (state === 7) {
         return {
-            color: "bg-green-500",
+            color: "#22c55e",
             title: "Vente terminée"
         };
     }
 
     if (state === 8) {
         return {
-            color: "bg-red-500",
+            color: "#ef4444",
             title: "Vente annulée"
         };
     }
 
+    if (state === 9) {
+        return {
+            color: "#c7aa72",
+            title: "Vente en litige"
+        };
+    }
+
     return {
-        color: "bg-gray-500",
+        color: "#6b7280",
         title: "Vente en cours"
     };
 }
@@ -59,7 +66,7 @@ export default function DashboardPage() {
 
     const fromBlock = 45431124n;
 
-    const { sales, loading, error } = useDashboardSales(
+    const { sales, loading, refreshing, error } = useDashboardSales(
         address as Address | undefined,
         fromBlock
     );
@@ -143,9 +150,18 @@ export default function DashboardPage() {
                 <section className="mt-8 rounded-2xl border border-[#2a3037] bg-[#11161b]">
 
                     <div className="border-b border-[#2a3037] px-6 py-5">
-                        <h2 className="text-xl font-bold">
-                            Mes ventes
-                        </h2>
+                        <div className="flex items-center gap-3">
+                            <h2 className="text-xl font-bold">
+                                Mes ventes
+                            </h2>
+
+                            {refreshing && (
+                                <span
+                                    title="Mise à jour"
+                                    className="h-4 w-4 animate-spin rounded-full border-2 border-[#3d454f] border-t-[#9eabbc]"
+                                />
+                            )}
+                        </div>
 
                         <p className="mt-1 text-sm text-[#9eabbc]">
                             Vendeur, acheteur ou intermédiaire
@@ -217,7 +233,11 @@ export default function DashboardPage() {
                                         <div className="flex items-start gap-4">
                                             <span
                                                 title={indicator.title}
-                                                className={`mt-2 h-3 w-3 shrink-0 rounded-full ${indicator.color}`}
+                                                className="mt-2 h-3 w-3 shrink-0 rounded-full"
+                                                style={{
+                                                    backgroundColor:
+                                                        indicator.color
+                                                }}
                                             />
 
                                             <div>

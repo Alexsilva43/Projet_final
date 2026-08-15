@@ -129,7 +129,7 @@ async function getVehicleSaleLogsInChunks(
 
         logs.push(...chunkLogs);
 
-        await sleep(1000);
+        //await sleep(1000);
     }
 
     return logs;
@@ -138,6 +138,7 @@ async function getVehicleSaleLogsInChunks(
 export function useDashboardSales(address?: Address, fromBlock?: bigint | null) {
     const [sales, setSales] = useState<DashboardSale[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const requestRef = useRef<string | null>(null);
 
@@ -145,6 +146,7 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
         if (!address) {
             setSales([]);
             setLoading(false);
+            setRefreshing(false);
             setError(null);
             return;
         }
@@ -152,6 +154,7 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
         if (fromBlock === null || fromBlock === undefined) {
             setSales([]);
             setLoading(false);
+            setRefreshing(false);
             return;
         }
 
@@ -162,6 +165,8 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
         }
 
         requestRef.current = requestKey;
+
+        setRefreshing(true);
 
         const cachedSales = loadSales(address);
 
@@ -178,7 +183,7 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
             const lastScannedBlock = getLastScannedBlock(address);
             const latestBlock = await publicClient.getBlockNumber();
 
-            const scanFromBlock = lastScannedBlock !== null ? lastScannedBlock + 1n : fromBlock;
+            const scanFromBlock = lastScannedBlock !== null ? lastScannedBlock - 1n : fromBlock;
 
             const eventsWhereIAmSeller = await getVehicleSaleLogsInChunks(
                 { seller: address },
@@ -302,6 +307,7 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
             requestRef.current = null;
         } finally {
             setLoading(false);
+            setRefreshing(false);
         }
     }, [address, fromBlock]);
 
@@ -317,6 +323,7 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
     return {
         sales,
         loading,
+        refreshing,
         error,
         refetch
     };

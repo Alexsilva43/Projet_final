@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { sleep } from "../../../utils/helpers";
 import { useEffect, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import { useAppKitAccount } from "@reown/appkit/react";
@@ -89,10 +88,30 @@ type RequiredAction = {
     showTransferCode?: boolean;
     showTransferCodeInput?: boolean;
     showCorrectedCodeInput?: boolean;
+    deadline?: bigint;
 };
 
 function shortenAddress(address: string) {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+async function waitForRpcBlock(blockNumber: bigint) {
+    while (true) {
+        const currentBlock = await publicClient.getBlockNumber();
+
+        console.log(
+            "RPC block:",
+            currentBlock.toString(),
+            "| Transaction block:",
+            blockNumber.toString()
+        );
+
+        if (currentBlock >= blockNumber) {
+            return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250));
+    }
 }
 
 function prepareTransferCode(code: string) {
@@ -168,6 +187,7 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
             return {
                 title: "Soumettre le code de transfert",
                 description: "Saisissez le code de transfert. Il sera envoyé en clair pour cette version de démonstration.",
+                deadline: details.transferCodeDeadline,
                 showTransferCodeInput: true,
                 buttons: [
                     { action: "submitTransferCode", label: "Soumettre le code" }
@@ -190,7 +210,8 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
         if (details.confirmCodeDeadlineActive) {
             return {
                 title: "En attente de l'acheteur",
-                description: "Vous avez soumis le code. L'acheteur doit maintenant le confirmer ou le rejeter."
+                description: "Vous avez soumis le code. L'acheteur doit maintenant le confirmer ou le rejeter.",
+                deadline: details.confirmCodeDeadline
             };
         }
 
@@ -198,6 +219,7 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
             return {
                 title: "Demander la vérification du code",
                 description: "L'acheteur n'a pas répondu. Vous pouvez demander une vérification par l'intermédiaire.",
+                deadline: details.noBuyerResponseVerificationDeadline,
                 buttons: [
                     { action: "requestVerification", label: "Demander la vérification" }
                 ]
@@ -281,6 +303,7 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
             return {
                 title: "Demander la vérification du code",
                 description: "L'acheteur a rejeté le code. Vous pouvez demander sa vérification.",
+                deadline: details.verificationRequestDeadline,
                 buttons: [
                     { action: "requestVerification", label: "Demander la vérification" }
                 ]
@@ -360,7 +383,8 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
         if (details.transferCodeDeadlineActive) {
             return {
                 title: "En attente du vendeur",
-                description: "Le vendeur doit soumettre le code de transfert."
+                description: "Le vendeur doit soumettre le code de transfert.",
+                deadline: details.transferCodeDeadline
             };
         }
 
@@ -378,6 +402,7 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
             return {
                 title: "Vérifier le code de transfert",
                 description: "Vérifiez le code communiqué par le vendeur puis confirmez-le ou rejetez-le.",
+                deadline: details.confirmCodeDeadline,
                 showTransferCode: true,
                 buttons: [
                     { action: "confirmTransferCode", label: "Confirmer le code" },
@@ -390,6 +415,7 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
             return {
                 title: "Délai de confirmation expiré",
                 description: "Le vendeur dispose encore d'un délai pour demander une vérification par l'intermédiaire.",
+                deadline: details.noBuyerResponseVerificationDeadline,
                 showTransferCode: true
             };
         }
@@ -424,6 +450,7 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
             return {
                 title: "Récupérer le véhicule",
                 description: `La vente est confirmée. Demandez maintenant le retrait physique du véhicule. Cette demande entraîne le paiement de ${formatUnits(details.pickupFee, 6)} EURC de frais de retrait.`,
+                showTransferCode: true,
                 buttons: [
                     { action: "requestVehiclePickup", label: "Demander le retrait" }
                 ]
@@ -432,7 +459,8 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
 
         return {
             title: "En attente de l'intermédiaire",
-            description: "Votre demande de retrait a été envoyée. L'intermédiaire doit confirmer la remise."
+            description: "Votre demande de retrait a été envoyée. L'intermédiaire doit confirmer la remise.",
+            showTransferCode: true
         };
     }
 
@@ -466,6 +494,7 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
             return {
                 title: "En attente du vendeur",
                 description: "Vous avez rejeté le code. Le vendeur peut encore demander sa vérification.",
+                deadline: details.verificationRequestDeadline,
                 showTransferCode: true
             };
         }
@@ -661,14 +690,14 @@ function getWorkflowStatus(
 
     if (step === 3) {
         if (state === 3) return "current";
-        if (state >= 4 && state <= 7) return "completed";
+        if ((state >= 4 && state <= 7) || state === 9) return "completed";
 
         return "future";
     }
 
     if (step === 4) {
         if (state === 4) return "current";
-        if (state >= 5 && state <= 7) return "completed";
+        if ((state >= 5 && state <= 7) || state === 9) return "completed";
 
         return "future";
     }
@@ -689,7 +718,7 @@ function getWorkflowStatus(
 
     if (step === 7) {
         return state === 7
-            ? "completed"
+            ? "current"
             : "future";
     }
 
@@ -713,6 +742,48 @@ export default function EscrowPage() {
 
     const [transferCode, setTransferCode] = useState("");
     const [correctedTransferCode, setCorrectedTransferCode] = useState("");
+
+    const [blockchainTimeReference, setBlockchainTimeReference] = useState<{
+        blockTimestamp: number;
+        localTimestamp: number;
+    } | null>(null);
+
+    const [clockTick, setClockTick] = useState(0);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function initializeBlockchainClock() {
+            try {
+                const block = await publicClient.getBlock();
+
+                if (cancelled) {
+                    return;
+                }
+
+                setBlockchainTimeReference({
+                    blockTimestamp: Number(block.timestamp),
+                    localTimestamp: Date.now()
+                });
+            } catch (err) {
+                console.error(
+                    "Impossible de récupérer le timestamp blockchain :",
+                    err
+                );
+            }
+        }
+
+        initializeBlockchainClock();
+
+        const interval = window.setInterval(() => {
+            setClockTick((value) => value + 1);
+        }, 1000);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(interval);
+        };
+    }, []);
 
     useEffect(() => {
         setEscrowAddressLoading(true);
@@ -754,6 +825,8 @@ export default function EscrowPage() {
                 "La transaction a échoué sur la blockchain."
             );
         }
+
+        await waitForRpcBlock(receipt.blockNumber);
 
         return receipt;
     }
@@ -1108,7 +1181,6 @@ export default function EscrowPage() {
                 await waitTransaction(hash, "Annulation de la vente...");
             }
 
-            await sleep(1000);
             await refetch();
 
             setTransactionStatus(
@@ -1189,6 +1261,18 @@ export default function EscrowPage() {
             role,
             details
         );
+
+    const currentBlockchainTime =
+        blockchainTimeReference
+            ? blockchainTimeReference.blockTimestamp +
+              Math.floor(
+                  (Date.now() -
+                      blockchainTimeReference.localTimestamp) /
+                      1000
+              )
+            : null;
+
+    void clockTick;
 
     let displayedTransferCode = "";
 
@@ -1328,30 +1412,47 @@ export default function EscrowPage() {
                             <AlternativeState
                                 label="Annulée"
                                 active={details.state === 8}
+                                variant="cancelled"
                             />
 
                             <AlternativeState
                                 label="Litige"
                                 active={details.state === 9}
+                                variant="dispute"
                             />
                         </div>
                     </div>
                 </section>
 
                 <section className="mt-8 rounded-2xl border border-[#4b3033] bg-[#171113] p-6">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#ef4444]">
-                        {requiredAction.buttons?.length
-                            ? "Action requise"
-                            : "Situation actuelle"}
-                    </p>
+                    <div className="flex items-start justify-between gap-8">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#ef4444]">
+                                {requiredAction.buttons?.length
+                                    ? "Action requise"
+                                    : "Situation actuelle"}
+                            </p>
 
-                    <h2 className="mt-3 text-2xl font-bold">
-                        {requiredAction.title}
-                    </h2>
+                            <h2 className="mt-3 text-2xl font-bold">
+                                {requiredAction.title}
+                            </h2>
 
-                    <p className="mt-3 max-w-2xl text-[#aeb7c3]">
-                        {requiredAction.description}
-                    </p>
+                            <p className="mt-3 max-w-2xl text-[#aeb7c3]">
+                                {requiredAction.description}
+                            </p>
+                        </div>
+
+                        {requiredAction.deadline !== undefined &&
+                            requiredAction.deadline > 0n &&
+                            currentBlockchainTime !== null && (
+                                <div className="shrink-0">
+                                    <DeadlineCountdown
+                                        deadline={requiredAction.deadline}
+                                        currentTime={currentBlockchainTime}
+                                    />
+                                </div>
+                            )}
+                    </div>
 
                     {requiredAction.showTransferCode && (
                         <div className="mt-6 max-w-2xl rounded-xl border border-[#343b44] bg-[#0d1115] p-4">
@@ -1507,7 +1608,7 @@ function WorkflowStep({
         completed:
             "border-[#3d454f] bg-[#171c21] text-white",
         current:
-            "border-[#ef4444] bg-[#2a171a] text-white",
+            "border-[#315442] bg-[#141d18] text-[#83b596]",
         future:
             "border-[#252b31] bg-[#0d1115] text-[#66717e]"
     };
@@ -1533,20 +1634,90 @@ function WorkflowStep({
 
 function AlternativeState({
     label,
-    active
+    active,
+    variant
 }: {
     label: string;
     active: boolean;
+    variant: "cancelled" | "dispute";
+
 }) {
+    const activeStyle =
+        variant === "cancelled"
+            ? "border-[#654040] bg-[#211617] text-[#c98b8b]"
+            : "border-[#66563a] bg-[#211d15] text-[#c7aa72]"
+
     return (
         <div
             className={
                 active
-                    ? "rounded-xl border border-[#ef4444] bg-[#2a171a] p-4 text-white"
+                    ? `rounded-xl border p-4 ${activeStyle}`
                     : "rounded-xl border border-[#252b31] bg-[#0d1115] p-4 text-[#66717e]"
             }
         >
             {active ? "●" : "○"} {label}
+        </div>
+    );
+}
+
+function DeadlineCountdown({
+    deadline,
+    currentTime
+}: {
+    deadline: bigint;
+    currentTime: number;
+}) {
+    const now = BigInt(currentTime);
+
+    const remaining =
+        deadline > now
+            ? deadline - now
+            : 0n;
+
+    if (remaining === 0n) {
+        return (
+            <div className="mt-5 w-fit rounded-xl border border-[#654040] bg-[#211617] px-4 py-3">
+                <p className="text-sm font-semibold text-[#c98b8b]">
+                    Délai expiré
+                </p>
+            </div>
+        );
+    }
+
+    const days = remaining / 86400n;
+    const hours = (remaining % 86400n) / 3600n;
+    const minutes = (remaining % 3600n) / 60n;
+    const seconds = remaining % 60n;
+
+    const parts: string[] = [];
+
+    if (days > 0n) {
+        parts.push(`${days} j`);
+    }
+
+    if (hours > 0n || days > 0n) {
+        parts.push(`${hours.toString().padStart(2, "0")} h`);
+    }
+
+    if (
+        minutes > 0n ||
+        hours > 0n ||
+        days > 0n
+    ) {
+        parts.push(`${minutes.toString().padStart(2, "0")} min`);
+    }
+
+    parts.push(`${seconds.toString().padStart(2, "0")} s`);
+
+    return (
+        <div className="w-fit rounded-lg border border-[#26352e] bg-[#101512] px-3 py-2">
+            <p className="text-[9px] uppercase tracking-[0.12em] text-[#52675c]">
+                Temps restant
+            </p>
+
+            <p className="mt-1 font-mono text-sm font-medium text-[#668b76]">
+                {parts.join(" ")}
+            </p>
         </div>
     );
 }

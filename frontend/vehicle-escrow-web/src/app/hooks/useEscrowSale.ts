@@ -130,10 +130,15 @@ export function useEscrowSale(escrowAddress?: Address) {
                 allowFailure: false
             });
 
+            console.log(
+                "useEscrowSale - state récupéré :",
+                Number(state)
+            );
+
             let encryptedTransferCode: Hex | undefined;
             let transferCodeHash: Hex | undefined;
 
-            if (Number(state) === 5 || Number(state) === 9) {
+            if (Number(state) === 5 || Number(state) === 6 || Number(state) === 9) {
                 const [code, hash] = await publicClient.multicall({
                     contracts: [
                         { address: escrowAddress, abi: ESCROW_ABI, functionName: "getEncryptedTransferCode" },

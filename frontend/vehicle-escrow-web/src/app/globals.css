@@ -29,7 +29,13 @@ a {
     cursor: pointer;
 }
 
+button:disabled,
+button:disabled * {
+    cursor: not-allowed !important;
+}
+
 @keyframes vehicle-float {
+
     0%,
     100% {
         transform: translateY(0);

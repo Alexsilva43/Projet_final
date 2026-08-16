@@ -121,6 +121,49 @@ function prepareTransferCode(code: string) {
     return { codeBytes, codeHash };
 }
 
+function normalizeTransferCode(code: string) {
+    return code
+        .trim()
+        .replace(/^["']+|["']+$/g, "")
+        .trim();
+}
+
+function isUserRejectedError(err: unknown): boolean {
+    if (!err || typeof err !== "object") {
+        return false;
+    }
+
+    const error = err as {
+        code?: number;
+        name?: string;
+        message?: string;
+        shortMessage?: string;
+        cause?: unknown;
+    };
+
+    const message = [
+        error.name,
+        error.message,
+        error.shortMessage
+    ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+    if (
+        error.code === 4001 ||
+        message.includes("user rejected") ||
+        message.includes("user denied") ||
+        message.includes("rejected the request")
+    ) {
+        return true;
+    }
+
+    return error.cause
+        ? isUserRejectedError(error.cause)
+        : false;
+}
+
 function getRole(
     address: Address | undefined,
     details: EscrowSaleDetails
@@ -737,6 +780,7 @@ export default function EscrowPage() {
     const [escrowAddressError, setEscrowAddressError] = useState<string | null>(null);
 
     const [pending, setPending] = useState(false);
+    const [validationError, setValidationError] = useState<string | null>(null);
     const [transactionError, setTransactionError] = useState<string | null>(null);
     const [transactionStatus, setTransactionStatus] = useState<string | null>(null);
 
@@ -1005,17 +1049,25 @@ export default function EscrowPage() {
             }
 
             if (action === "submitTransferCode") {
-                if (!transferCode.trim()) {
-                    throw new Error(
-                        "Veuillez saisir le code de transfert."
+                const normalizedCode =
+                    normalizeTransferCode(
+                        transferCode
                     );
+
+                if (!normalizedCode) {
+                    setValidationError(
+                        "Veuillez saisir un code de transfert valide."
+                    );
+                    return;
                 }
+
+                setValidationError(null);
 
                 const {
                     codeBytes,
                     codeHash
                 } = prepareTransferCode(
-                    transferCode.trim()
+                    normalizedCode
                 );
 
                 const hash =
@@ -1026,7 +1078,11 @@ export default function EscrowPage() {
                             codeHash
                         ]
                     );
-                await waitTransaction(hash, "Soumission du code de transfert...");
+
+                await waitTransaction(
+                    hash,
+                    "Soumission du code de transfert..."
+                );
 
                 setTransferCode("");
             }
@@ -1109,17 +1165,25 @@ export default function EscrowPage() {
             }
 
             if (action === "resolveCorrectedCode") {
-                if (!correctedTransferCode.trim()) {
-                    throw new Error(
-                        "Veuillez saisir le code corrigé."
+                const normalizedCorrectedCode =
+                    normalizeTransferCode(
+                        correctedTransferCode
                     );
+
+                if (!normalizedCorrectedCode) {
+                    setValidationError(
+                        "Veuillez saisir un code corrigé valide."
+                    );
+                    return;
                 }
+
+                setValidationError(null);
 
                 const {
                     codeBytes,
                     codeHash
                 } = prepareTransferCode(
-                    correctedTransferCode.trim()
+                    normalizedCorrectedCode
                 );
 
                 const hash =
@@ -1130,7 +1194,11 @@ export default function EscrowPage() {
                             codeHash
                         ]
                     );
-                await waitTransaction(hash, "Validation du code corrigé...");
+
+                await waitTransaction(
+                    hash,
+                    "Validation du code corrigé..."
+                );
 
                 setCorrectedTransferCode("");
             }
@@ -1187,6 +1255,14 @@ export default function EscrowPage() {
                 "Transaction confirmée."
             );
         } catch (err) {
+            if (isUserRejectedError(err)) {
+                setTransactionError(
+                    "La transaction a été refusée ou n’a pas pu être envoyée."
+                );
+                setTransactionStatus(null);
+                return;
+            }
+
             console.error(
                 "Erreur lors de la transaction :",
                 err
@@ -1265,11 +1341,11 @@ export default function EscrowPage() {
     const currentBlockchainTime =
         blockchainTimeReference
             ? blockchainTimeReference.blockTimestamp +
-              Math.floor(
-                  (Date.now() -
-                      blockchainTimeReference.localTimestamp) /
-                      1000
-              )
+            Math.floor(
+                (Date.now() -
+                    blockchainTimeReference.localTimestamp) /
+                1000
+            )
             : null;
 
     void clockTick;
@@ -1286,6 +1362,28 @@ export default function EscrowPage() {
             displayedTransferCode =
                 "Code illisible";
         }
+    }
+
+    const normalizedCorrectedCode =
+        normalizeTransferCode(
+            correctedTransferCode
+        );
+
+    let correctedCodeDiffersFromOriginal = false;
+
+    if (
+        normalizedCorrectedCode &&
+        details.transferCodeHash
+    ) {
+        const {
+            codeHash: correctedCodeHash
+        } = prepareTransferCode(
+            normalizedCorrectedCode
+        );
+
+        correctedCodeDiffersFromOriginal =
+            correctedCodeHash.toLowerCase() !==
+            details.transferCodeHash.toLowerCase();
     }
 
     return (
@@ -1424,7 +1522,13 @@ export default function EscrowPage() {
                     </div>
                 </section>
 
-                <section className="mt-8 rounded-2xl border border-[#4b3033] bg-[#171113] p-6">
+                <section
+                    onClick={() => {
+                        setTransactionError(null);
+                        setTransactionStatus(null);
+                    }}
+                    className="mt-8 rounded-2xl border border-[#4b3033] bg-[#171113] p-6"
+                >
                     <div className="flex items-start justify-between gap-8">
                         <div>
                             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#ef4444]">
@@ -1476,6 +1580,9 @@ export default function EscrowPage() {
                             <input
                                 type="text"
                                 value={transferCode}
+                                onFocus={() =>
+                                    setValidationError(null)
+                                }
                                 onChange={(event) =>
                                     setTransferCode(
                                         event.target.value
@@ -1496,6 +1603,9 @@ export default function EscrowPage() {
                             <input
                                 type="text"
                                 value={correctedTransferCode}
+                                onFocus={() =>
+                                    setValidationError(null)
+                                }
                                 onChange={(event) =>
                                     setCorrectedTransferCode(
                                         event.target.value
@@ -1505,6 +1615,12 @@ export default function EscrowPage() {
                                 className="w-full rounded-xl border border-[#343b44] bg-[#0d1115] px-4 py-3 outline-none transition focus:border-[#ef4444]"
                             />
                         </div>
+                    )}
+
+                    {validationError && (
+                        <p className="mt-5 text-sm text-[#ff6268]">
+                            {validationError}
+                        </p>
                     )}
 
                     {transactionStatus && (
@@ -1523,25 +1639,35 @@ export default function EscrowPage() {
                         requiredAction.buttons.length > 0 && (
                             <div className="mt-6 flex flex-wrap gap-3">
                                 {requiredAction.buttons.map(
-                                    (button) => (
-                                        <button
-                                            key={button.action}
-                                            type="button"
-                                            disabled={pending}
-                                            onClick={() =>
-                                                handleAction(
-                                                    button.action
-                                                )
-                                            }
-                                            className={getButtonClass(
-                                                button.variant
-                                            )}
-                                        >
-                                            {pending
-                                                ? "Transaction en cours..."
-                                                : button.label}
-                                        </button>
-                                    )
+                                    (button) => {
+                                        const originalCodeDisabled =
+                                            button.action ===
+                                                "resolveOriginalCode" &&
+                                            correctedCodeDiffersFromOriginal;
+
+                                        return (
+                                            <button
+                                                key={button.action}
+                                                type="button"
+                                                disabled={
+                                                    pending ||
+                                                    originalCodeDisabled
+                                                }
+                                                onClick={() =>
+                                                    handleAction(
+                                                        button.action
+                                                    )
+                                                }
+                                                className={getButtonClass(
+                                                    button.variant
+                                                )}
+                                            >
+                                                {pending
+                                                    ? "Transaction en cours..."
+                                                    : button.label}
+                                            </button>
+                                        );
+                                    }
                                 )}
                             </div>
                         )}

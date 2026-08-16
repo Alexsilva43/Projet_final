@@ -21,6 +21,8 @@ import {
     EURC_DECIMALS
 } from "../../../constants/contract";
 
+import { publicClient } from "../../lib/publicClient";
+
 const INTERMEDIARIES = [
     {
         name: "Garage des Alpes",
@@ -40,11 +42,34 @@ type SaleForm = {
     vehiclePrice: string;
 };
 
+type ErrorField =
+    | "buyer"
+    | "intermediary"
+    | "vehiclePrice";
+
 const INITIAL_FORM: SaleForm = {
     buyer: "",
     intermediary: "",
     vehiclePrice: ""
 };
+
+async function waitForRpcBlock(
+    blockNumber: bigint
+) {
+    while (true) {
+        const currentBlock =
+            await publicClient.getBlockNumber();
+
+        if (currentBlock >= blockNumber) {
+            return;
+        }
+
+        await new Promise(
+            (resolve) =>
+                setTimeout(resolve, 250)
+        );
+    }
+}
 
 export default function CreateSalePage() {
     const router = useRouter();
@@ -54,17 +79,24 @@ export default function CreateSalePage() {
         isConnected
     } = useAppKitAccount();
 
-    const [form, setForm] = useState<SaleForm>(INITIAL_FORM);
-    const [formError, setFormError] = useState("");
+    const [form, setForm] = useState<SaleForm>(
+        INITIAL_FORM
+    );
+
+    const [formError, setFormError] =
+        useState("");
+
+    const [errorFields, setErrorFields] =
+        useState<ErrorField[]>([]);
 
     const {
         data: transactionHash,
-        error: writeError,
         isPending: isWalletPending,
         mutateAsync: writeContract
     } = useWriteContract();
 
     const {
+        data: receipt,
         isLoading: isConfirming,
         isSuccess: isConfirmed
     } = useWaitForTransactionReceipt({
@@ -72,17 +104,48 @@ export default function CreateSalePage() {
     });
 
     useEffect(() => {
-        if (isConfirmed) {
-            router.push("/dashboard");
-            router.refresh();
+        if (!isConfirmed || !receipt) {
+            return;
         }
-    }, [isConfirmed, router]);
+
+        const confirmedBlockNumber =
+            receipt.blockNumber;
+
+        let cancelled = false;
+
+        async function redirectAfterRpcSync() {
+            try {
+                await waitForRpcBlock(
+                    confirmedBlockNumber
+                );
+
+                if (cancelled) {
+                    return;
+                }
+
+                router.push("/dashboard");
+            } catch (err) {
+                console.error(
+                    "Erreur pendant la synchronisation RPC :",
+                    err
+                );
+            }
+        }
+
+        redirectAfterRpcSync();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isConfirmed, receipt, router]);
 
     if (!isConnected || !address) {
         return null;
     }
 
-    function updateField<Field extends keyof SaleForm>(
+    function updateField<
+        Field extends keyof SaleForm
+    >(
         field: Field,
         value: SaleForm[Field]
     ) {
@@ -92,16 +155,33 @@ export default function CreateSalePage() {
         }));
     }
 
+    function clearFieldError(
+        field: ErrorField
+    ) {
+        if (!errorFields.includes(field)) {
+            return;
+        }
+
+        setFormError("");
+        setErrorFields([]);
+    }
+
     async function handleSubmit(
         event: SyntheticEvent<HTMLFormElement>
     ) {
         event.preventDefault();
+
         setFormError("");
+        setErrorFields([]);
 
         if (!isAddress(form.buyer)) {
             setFormError(
                 "L’adresse de l’acheteur est invalide."
             );
+
+            setErrorFields([
+                "buyer"
+            ]);
 
             return;
         }
@@ -111,50 +191,101 @@ export default function CreateSalePage() {
                 "Veuillez sélectionner un intermédiaire."
             );
 
+            setErrorFields([
+                "intermediary"
+            ]);
+
             return;
         }
 
-        const seller = address as Address;
-        const buyer = form.buyer as Address;
-        const intermediary = form.intermediary as Address;
+        const seller =
+            address as Address;
+
+        const buyer =
+            form.buyer as Address;
+
+        const intermediary =
+            form.intermediary as Address;
 
         if (
-            buyer.toLowerCase() === seller.toLowerCase()
+            buyer.toLowerCase() ===
+            seller.toLowerCase()
         ) {
             setFormError(
                 "Le vendeur et l’acheteur doivent être différents."
             );
 
+            setErrorFields([
+                "buyer"
+            ]);
+
             return;
         }
 
         if (
             intermediary.toLowerCase() ===
-            seller.toLowerCase() ||
+            seller.toLowerCase()
+        ) {
+            setFormError(
+                "L’intermédiaire ne peut être ni le vendeur ni l’acheteur."
+            );
+
+            setErrorFields([
+                "intermediary"
+            ]);
+
+            return;
+        }
+
+        if (
             intermediary.toLowerCase() ===
             buyer.toLowerCase()
         ) {
             setFormError(
-                "L’intermédiaire doit avoir une adresse différente."
+                "L’intermédiaire ne peut être ni le vendeur ni l’acheteur."
             );
+
+            setErrorFields([
+                "buyer",
+                "intermediary"
+            ]);
+
+            return;
+        }
+
+        let vehiclePrice: bigint;
+
+        try {
+            vehiclePrice =
+                parseUnits(
+                    form.vehiclePrice,
+                    EURC_DECIMALS
+                );
+        } catch {
+            setFormError(
+                "Le prix du véhicule est invalide."
+            );
+
+            setErrorFields([
+                "vehiclePrice"
+            ]);
+
+            return;
+        }
+
+        if (vehiclePrice <= 0n) {
+            setFormError(
+                "Le prix doit être supérieur à zéro."
+            );
+
+            setErrorFields([
+                "vehiclePrice"
+            ]);
 
             return;
         }
 
         try {
-            const vehiclePrice = parseUnits(
-                form.vehiclePrice,
-                EURC_DECIMALS
-            );
-
-            if (vehiclePrice <= 0n) {
-                setFormError(
-                    "Le prix doit être supérieur à zéro."
-                );
-
-                return;
-            }
-
             await writeContract({
                 address: FACTORY_ADDRESS,
                 abi: FACTORY_ABI,
@@ -169,18 +300,17 @@ export default function CreateSalePage() {
             setFormError(
                 "La transaction a été refusée ou n’a pas pu être envoyée."
             );
+
+            setErrorFields([]);
         }
     }
 
     const inputClass = `
         mt-2 w-full rounded-xl border border-[#303740]
         bg-[#090d11] px-4 py-3 text-white outline-none
-        transition placeholder:text-[#556170]
+        transition placeholder:text-[#3f4853]
         focus:border-[#ef4444]
     `;
-
-    const displayedError =
-        formError || writeError?.message;
 
     return (
         <main className="min-h-screen bg-[#080b0e] px-6 py-14 text-white">
@@ -209,6 +339,13 @@ export default function CreateSalePage() {
 
                 <form
                     onSubmit={handleSubmit}
+                    onClick={() => {
+                        if (formError) {
+                            setFormError("");
+                            setErrorFields([]);
+                        }
+                    }}
+                    noValidate
                     className="mt-10 space-y-8 rounded-2xl border border-[#2a3037] bg-[#11161b] p-6 md:p-8"
                 >
                     <section>
@@ -232,6 +369,11 @@ export default function CreateSalePage() {
 
                                 <input
                                     value={form.buyer}
+                                    onFocus={() =>
+                                        clearFieldError(
+                                            "buyer"
+                                        )
+                                    }
                                     onChange={(event) =>
                                         updateField(
                                             "buyer",
@@ -249,6 +391,11 @@ export default function CreateSalePage() {
 
                                 <select
                                     value={form.intermediary}
+                                    onFocus={() =>
+                                        clearFieldError(
+                                            "intermediary"
+                                        )
+                                    }
                                     onChange={(event) =>
                                         updateField(
                                             "intermediary",
@@ -257,7 +404,9 @@ export default function CreateSalePage() {
                                     }
                                     className={inputClass}
                                     style={{
-                                        color: form.intermediary ? "#ffffff" : "#556170"
+                                        color: form.intermediary
+                                            ? "#ffffff"
+                                            : "#556170"
                                     }}
                                     required
                                 >
@@ -269,15 +418,24 @@ export default function CreateSalePage() {
                                         Sélectionner un intermédiaire
                                     </option>
 
-                                    {INTERMEDIARIES.map((intermediary) => (
-                                        <option
-                                            key={intermediary.address}
-                                            value={intermediary.address}
-                                            style={{ color: "#ffffff" }}
-                                        >
-                                            {intermediary.name} — {intermediary.location}
-                                        </option>
-                                    ))}
+                                    {INTERMEDIARIES.map(
+                                        (intermediary) => (
+                                            <option
+                                                key={
+                                                    intermediary.address
+                                                }
+                                                value={
+                                                    intermediary.address
+                                                }
+                                                style={{
+                                                    color: "#ffffff"
+                                                }}
+                                            >
+                                                {intermediary.name} —{" "}
+                                                {intermediary.location}
+                                            </option>
+                                        )
+                                    )}
                                 </select>
                             </label>
                         </div>
@@ -294,16 +452,20 @@ export default function CreateSalePage() {
                             <div className="relative">
                                 <input
                                     type="number"
-                                    min="0"
                                     step="0.000001"
                                     value={form.vehiclePrice}
+                                    onFocus={() =>
+                                        clearFieldError(
+                                            "vehiclePrice"
+                                        )
+                                    }
                                     onChange={(event) =>
                                         updateField(
                                             "vehiclePrice",
                                             event.target.value
                                         )
                                     }
-                                    placeholder="20000.00"
+                                    placeholder="Ex. 20000"
                                     className={`${inputClass} pr-20`}
                                     required
                                 />
@@ -315,15 +477,16 @@ export default function CreateSalePage() {
                         </label>
                     </section>
 
-                    {displayedError && (
+                    {formError && (
                         <p className="rounded-xl border border-[#7f252b] bg-[#2a171a] px-4 py-3 text-sm text-[#ff8b90]">
-                            {displayedError}
+                            {formError}
                         </p>
                     )}
 
                     {transactionHash && (
                         <p className="break-all rounded-xl border border-[#304153] bg-[#111b25] px-4 py-3 text-sm text-[#a9c7e8]">
-                            Transaction : {transactionHash}
+                            Transaction :{" "}
+                            {transactionHash}
                         </p>
                     )}
 

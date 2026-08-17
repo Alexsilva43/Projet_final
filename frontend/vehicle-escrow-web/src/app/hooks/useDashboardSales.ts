@@ -19,6 +19,8 @@ export type DashboardSale = {
     transactionHash: `0x${string}`;
     role: "seller" | "buyer" | "intermediary";
     state: number;
+    recoveryRequired: boolean;
+    recoveryRequested: boolean;
     createdAt: Date;
 };
 
@@ -33,6 +35,8 @@ type CachedDashboardSale = {
     transactionHash: `0x${string}`;
     role: "seller" | "buyer" | "intermediary";
     state: number;
+    recoveryRequired?: boolean;
+    recoveryRequested?: boolean;
     createdAt: string;
 };
 
@@ -69,14 +73,29 @@ function loadSales(address: Address) {
     try {
         const cachedSales = JSON.parse(storedSales) as CachedDashboardSale[];
 
+        const cacheIsOutdated = cachedSales.some(
+            (sale) =>
+                typeof sale.recoveryRequired !== "boolean" ||
+                typeof sale.recoveryRequested !== "boolean"
+        );
+
+        if (cacheIsOutdated) {
+            localStorage.removeItem(getSalesStorageKey(address));
+            localStorage.removeItem(getLastBlockStorageKey(address));
+            return [];
+        }
+
         return cachedSales.map((sale): DashboardSale => ({
             ...sale,
+            recoveryRequired: sale.recoveryRequired as boolean,
+            recoveryRequested: sale.recoveryRequested as boolean,
             vehicleTokenId: BigInt(sale.vehicleTokenId),
             blockNumber: BigInt(sale.blockNumber),
             createdAt: new Date(sale.createdAt)
         }));
     } catch {
         localStorage.removeItem(getSalesStorageKey(address));
+        localStorage.removeItem(getLastBlockStorageKey(address));
         return [];
     }
 }
@@ -129,7 +148,7 @@ async function getVehicleSaleLogsInChunks(
 
         logs.push(...chunkLogs);
 
-        //await sleep(1000);
+        await sleep(250);
     }
 
     return logs;
@@ -209,7 +228,16 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
                 ...eventsWhereIAmIntermediary
             ];
 
-            const salesMap = new Map<string, Omit<DashboardSale, "state" | "createdAt">>();
+            const salesMap = new Map<
+                string,
+                Omit<
+                    DashboardSale,
+                    | "state"
+                    | "recoveryRequired"
+                    | "recoveryRequested"
+                    | "createdAt"
+                >
+            >();
 
             for (const sale of cachedSales) {
                 salesMap.set(sale.escrow.toLowerCase(), {
@@ -272,9 +300,45 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
                     functionName: "getSaleState"
                 });
 
+                const stateNumber = Number(state);
+
                 const cachedSale = cachedSales.find(
                     (cached) => cached.escrow.toLowerCase() === sale.escrow.toLowerCase()
                 );
+
+                let recoveryRequired =
+                    cachedSale?.recoveryRequired ?? false;
+
+                let recoveryRequested =
+                    cachedSale?.recoveryRequested ?? false;
+
+                if (stateNumber === 8) {
+                    try {
+                        [
+                            recoveryRequired,
+                            recoveryRequested
+                        ] = await Promise.all([
+                            publicClient.readContract({
+                                address: sale.escrow,
+                                abi: ESCROW_ABI,
+                                functionName: "isVehicleRecoveryRequired"
+                            }),
+                            publicClient.readContract({
+                                address: sale.escrow,
+                                abi: ESCROW_ABI,
+                                functionName: "isVehicleRecoveryRequested"
+                            })
+                        ]);
+                    } catch (recoveryError) {
+                        console.warn(
+                            `Impossible de lire l'état de récupération pour l'escrow ${sale.escrow}. Les dernières valeurs connues seront conservées.`,
+                            recoveryError
+                        );
+                    }
+                } else {
+                    recoveryRequired = false;
+                    recoveryRequested = false;
+                }
 
                 let createdAt: Date;
 
@@ -290,7 +354,9 @@ export function useDashboardSales(address?: Address, fromBlock?: bigint | null) 
 
                 salesWithState.push({
                     ...sale,
-                    state: Number(state),
+                    state: stateNumber,
+                    recoveryRequired,
+                    recoveryRequested,
                     createdAt
                 });
             }

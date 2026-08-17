@@ -14,31 +14,50 @@ function shortenAddress(address?: string) {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-function getSaleIndicator(state: number) {
+function getSaleIndicator(
+    state: number,
+    role: "seller" | "buyer" | "intermediary",
+    recoveryRequired: boolean
+) {
     if (state === 7) {
         return {
             color: "#22c55e",
-            title: "Vente terminée"
-        };
-    }
-
-    if (state === 8) {
-        return {
-            color: "#ef4444",
-            title: "Vente annulée"
+            title: "Vente terminée",
+            statusLabel: "Terminée"
         };
     }
 
     if (state === 9) {
         return {
             color: "#c7aa72",
-            title: "Vente en litige"
+            title: "Vente en litige",
+            statusLabel: "Litige"
+        };
+    }
+
+    if (state === 8) {
+        if (
+            role !== "buyer" &&
+            recoveryRequired
+        ) {
+            return {
+                color: "#6b7280",
+                title: "Vente annulée",
+                statusLabel: "Annulée"
+            };
+        }
+
+        return {
+            color: "#ef4444",
+            title: "Vente annulée",
+            statusLabel: "Annulée"
         };
     }
 
     return {
         color: "#6b7280",
-        title: "Vente en cours"
+        title: "Vente en cours",
+        statusLabel: stateLabels[state] ?? "En cours"
     };
 }
 
@@ -64,7 +83,7 @@ const stateLabels = [
 export default function DashboardPage() {
     const { address, isConnected } = useAppKitAccount();
 
-    const fromBlock = 45431124n;
+    const fromBlock = 45592586n;
 
     const { sales, loading, refreshing, error } = useDashboardSales(
         address as Address | undefined,
@@ -216,7 +235,11 @@ export default function DashboardPage() {
                     {sales.length > 0 && (
                         <div className="divide-y divide-[#2a3037]">
                             {sales.map((sale) => {
-                                const indicator = getSaleIndicator(sale.state);
+                                const indicator = getSaleIndicator(
+                                    sale.state,
+                                    sale.role,
+                                    sale.recoveryRequired
+                                );
 
                                 return (
                                     <Link
@@ -278,7 +301,7 @@ export default function DashboardPage() {
                                                 </p>
 
                                                 <p className="mt-1 font-semibold text-[#d7dde5]">
-                                                    {stateLabels[sale.state] ?? "Inconnu"}
+                                                    {indicator.statusLabel}
                                                 </p>
                                             </div>
 

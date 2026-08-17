@@ -128,6 +128,75 @@ function normalizeTransferCode(code: string) {
         .trim();
 }
 
+function getWorkflowProgressStorageKey(
+    escrowAddress: Address
+) {
+    return `escrow-workflow-progress-${escrowAddress.toLowerCase()}`;
+}
+
+function normalizeWorkflowProgressState(
+    state: number
+) {
+    if (state >= 0 && state <= 7) {
+        return state;
+    }
+
+    if (state === 9) {
+        return 5;
+    }
+
+    return 0;
+}
+
+function inferCancelledWorkflowProgress(
+    details: EscrowSaleDetails
+) {
+    if (
+        details.encryptedTransferCode ||
+        details.transferCodeHash ||
+        details.confirmCodeDeadline > 0n ||
+        details.verificationRequestDeadline > 0n ||
+        details.noBuyerResponseVerificationDeadline > 0n
+    ) {
+        return 5;
+    }
+
+    if (details.transferCodeDeadline > 0n) {
+        return 4;
+    }
+
+    return 0;
+}
+
+function saveWorkflowProgress(
+    escrowAddress: Address,
+    state: number
+) {
+    const normalizedState =
+        normalizeWorkflowProgressState(state);
+
+    const storageKey =
+        getWorkflowProgressStorageKey(
+            escrowAddress
+        );
+
+    const storedValue =
+        localStorage.getItem(storageKey);
+
+    const storedState =
+        storedValue !== null &&
+        /^\d+$/.test(storedValue)
+            ? Number(storedValue)
+            : -1;
+
+    if (normalizedState > storedState) {
+        localStorage.setItem(
+            storageKey,
+            normalizedState.toString()
+        );
+    }
+}
+
 function isUserRejectedError(err: unknown): boolean {
     if (!err || typeof err !== "object") {
         return false;
@@ -179,9 +248,41 @@ function getRole(
     return null;
 }
 
-function getSellerAction(details: EscrowSaleDetails): RequiredAction {
+function isDeadlineActive(
+    deadline: bigint,
+    currentBlockchainTime: number | null,
+    fallbackActive: boolean
+) {
+    if (deadline === 0n) {
+        return false;
+    }
+
+    if (currentBlockchainTime === null) {
+        return fallbackActive;
+    }
+
+    return BigInt(currentBlockchainTime) <= deadline;
+}
+
+function isDeadlineExpired(
+    deadline: bigint,
+    currentBlockchainTime: number | null
+) {
+    if (
+        deadline === 0n ||
+        currentBlockchainTime === null
+    ) {
+        return false;
+    }
+
+    return BigInt(currentBlockchainTime) > deadline;
+}
+
+function getSellerAction(
+    details: EscrowSaleDetails,
+    currentBlockchainTime: number | null
+): RequiredAction {
     const state = details.state;
-    const now = BigInt(Math.floor(Date.now() / 1000));
 
     if (state === 0 || state === 1) {
         return {
@@ -226,57 +327,60 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
     }
 
     if (state === 4) {
-        if (details.transferCodeDeadlineActive) {
-            return {
-                title: "Soumettre le code de transfert",
-                description: "Saisissez le code de transfert. Il sera envoyé en clair pour cette version de démonstration.",
-                deadline: details.transferCodeDeadline,
-                showTransferCodeInput: true,
-                buttons: [
-                    { action: "submitTransferCode", label: "Soumettre le code" }
-                ]
-            };
-        }
+        const transferDeadlineExpired =
+            isDeadlineExpired(
+                details.transferCodeDeadline,
+                currentBlockchainTime
+            );
 
-        if (details.transferCodeDeadline > 0n && now > details.transferCodeDeadline) {
+        if (transferDeadlineExpired) {
             return {
                 title: "Délai de soumission expiré",
-                description: "Le délai de soumission du code est expiré.",
+                description: "Le délai de soumission du code est expiré. Le vendeur ou l'acheteur peut annuler la vente.",
                 buttons: [
                     { action: "cancelAfterTransferCodeDeadline", label: "Annuler la vente", variant: "danger" }
                 ]
             };
         }
+
+        return {
+            title: "Soumettre le code de transfert",
+            description: "Saisissez le code de transfert. Il sera envoyé en clair pour cette version de démonstration.",
+            deadline: details.transferCodeDeadline,
+            showTransferCodeInput: true,
+            buttons: [
+                { action: "submitTransferCode", label: "Soumettre le code" }
+            ]
+        };
     }
 
     if (state === 5) {
-        if (details.confirmCodeDeadlineActive) {
+        const confirmDeadlineActive =
+            isDeadlineActive(
+                details.confirmCodeDeadline,
+                currentBlockchainTime,
+                details.confirmCodeDeadlineActive
+            );
+
+        const verificationWindowExpired =
+            isDeadlineExpired(
+                details.noBuyerResponseVerificationDeadline,
+                currentBlockchainTime
+            );
+
+        if (confirmDeadlineActive) {
             return {
                 title: "En attente de l'acheteur",
                 description: "Vous avez soumis le code. L'acheteur doit maintenant le confirmer ou le rejeter.",
-                deadline: details.confirmCodeDeadline
+                deadline: details.confirmCodeDeadline,
+                showTransferCode: true
             };
         }
 
-        if (details.buyerTimeoutVerificationActive) {
-            return {
-                title: "Demander la vérification du code",
-                description: "L'acheteur n'a pas répondu. Vous pouvez demander une vérification par l'intermédiaire.",
-                deadline: details.noBuyerResponseVerificationDeadline,
-                buttons: [
-                    { action: "requestVerification", label: "Demander la vérification" }
-                ]
-            };
-        }
-
-        if (
-            !details.verificationRequested &&
-            details.noBuyerResponseVerificationDeadline > 0n &&
-            now > details.noBuyerResponseVerificationDeadline
-        ) {
+        if (verificationWindowExpired) {
             return {
                 title: "Délai de vérification expiré",
-                description: "Aucune vérification n'a été demandée dans le délai prévu.",
+                description: "L'acheteur n'a pas répondu et aucune vérification n'a été demandée dans le délai prévu. Le vendeur ou l'acheteur peut annuler la vente.",
                 buttons: [
                     {
                         action: "cancelAfterConfirmAndVerificationDeadline",
@@ -288,8 +392,13 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
         }
 
         return {
-            title: "En attente",
-            description: "Le code de transfert est en attente de traitement."
+            title: "Demander la vérification du code",
+            description: "L'acheteur n'a pas répondu. Vous pouvez demander une vérification par l'intermédiaire.",
+            deadline: details.noBuyerResponseVerificationDeadline,
+            showTransferCode: true,
+            buttons: [
+                { action: "requestVerification", label: "Demander la vérification" }
+            ]
         };
     }
 
@@ -335,38 +444,39 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
         if (details.verificationRequested) {
             return {
                 title: "En attente de l'intermédiaire",
-                description: "L'intermédiaire doit maintenant résoudre le litige."
+                description: "L'intermédiaire doit maintenant résoudre le litige.",
+                showTransferCode: true
             };
         }
 
-        if (
-            details.disputeReason === 1 &&
-            details.verificationRequestDeadlineActive
-        ) {
+        if (details.disputeReason === 1) {
+            const verificationDeadlineExpired =
+                isDeadlineExpired(
+                    details.verificationRequestDeadline,
+                    currentBlockchainTime
+                );
+
+            if (verificationDeadlineExpired) {
+                return {
+                    title: "Délai de vérification expiré",
+                    description: "Le vendeur n'a pas demandé la vérification dans le délai prévu. Le vendeur ou l'acheteur peut annuler la vente.",
+                    buttons: [
+                        {
+                            action: "cancelAfterVerificationRequestDeadline",
+                            label: "Annuler la vente",
+                            variant: "danger"
+                        }
+                    ]
+                };
+            }
+
             return {
                 title: "Demander la vérification du code",
                 description: "L'acheteur a rejeté le code. Vous pouvez demander sa vérification.",
                 deadline: details.verificationRequestDeadline,
+                showTransferCode: true,
                 buttons: [
                     { action: "requestVerification", label: "Demander la vérification" }
-                ]
-            };
-        }
-
-        if (
-            details.disputeReason === 1 &&
-            details.verificationRequestDeadline > 0n &&
-            now > details.verificationRequestDeadline
-        ) {
-            return {
-                title: "Délai de vérification expiré",
-                description: "La période de demande de vérification est expirée.",
-                buttons: [
-                    {
-                        action: "cancelAfterVerificationRequestDeadline",
-                        label: "Annuler la vente",
-                        variant: "danger"
-                    }
                 ]
             };
         }
@@ -383,9 +493,11 @@ function getSellerAction(details: EscrowSaleDetails): RequiredAction {
     };
 }
 
-function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
+function getBuyerAction(
+    details: EscrowSaleDetails,
+    currentBlockchainTime: number | null
+): RequiredAction {
     const state = details.state;
-    const now = BigInt(Math.floor(Date.now() / 1000));
 
     if (state === 0 || state === 2) {
         return {
@@ -423,25 +535,44 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
     }
 
     if (state === 4) {
-        if (details.transferCodeDeadlineActive) {
+        const transferDeadlineExpired =
+            isDeadlineExpired(
+                details.transferCodeDeadline,
+                currentBlockchainTime
+            );
+
+        if (transferDeadlineExpired) {
             return {
-                title: "En attente du vendeur",
-                description: "Le vendeur doit soumettre le code de transfert.",
-                deadline: details.transferCodeDeadline
+                title: "Délai du vendeur expiré",
+                description: "Le vendeur n'a pas soumis le code dans le délai prévu. Vous pouvez annuler la vente.",
+                buttons: [
+                    { action: "cancelAfterTransferCodeDeadline", label: "Annuler la vente", variant: "danger" }
+                ]
             };
         }
 
         return {
-            title: "Délai du vendeur expiré",
-            description: "Le vendeur n'a pas soumis le code dans le délai prévu.",
-            buttons: [
-                { action: "cancelAfterTransferCodeDeadline", label: "Annuler la vente", variant: "danger" }
-            ]
+            title: "En attente du vendeur",
+            description: "Le vendeur doit soumettre le code de transfert.",
+            deadline: details.transferCodeDeadline
         };
     }
 
     if (state === 5) {
-        if (details.confirmCodeDeadlineActive) {
+        const confirmDeadlineActive =
+            isDeadlineActive(
+                details.confirmCodeDeadline,
+                currentBlockchainTime,
+                details.confirmCodeDeadlineActive
+            );
+
+        const verificationWindowExpired =
+            isDeadlineExpired(
+                details.noBuyerResponseVerificationDeadline,
+                currentBlockchainTime
+            );
+
+        if (confirmDeadlineActive) {
             return {
                 title: "Vérifier le code de transfert",
                 description: "Vérifiez le code communiqué par le vendeur puis confirmez-le ou rejetez-le.",
@@ -454,23 +585,10 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
             };
         }
 
-        if (details.buyerTimeoutVerificationActive) {
-            return {
-                title: "Délai de confirmation expiré",
-                description: "Le vendeur dispose encore d'un délai pour demander une vérification par l'intermédiaire.",
-                deadline: details.noBuyerResponseVerificationDeadline,
-                showTransferCode: true
-            };
-        }
-
-        if (
-            !details.verificationRequested &&
-            details.noBuyerResponseVerificationDeadline > 0n &&
-            now > details.noBuyerResponseVerificationDeadline
-        ) {
+        if (verificationWindowExpired) {
             return {
                 title: "Délai de vérification expiré",
-                description: "Aucune vérification n'a été demandée. Vous pouvez annuler la vente.",
+                description: "Vous n'avez pas répondu et le vendeur n'a pas demandé de vérification dans le délai prévu. Vous pouvez annuler la vente.",
                 buttons: [
                     {
                         action: "cancelAfterConfirmAndVerificationDeadline",
@@ -482,9 +600,9 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
         }
 
         return {
-            title: "En attente",
-            description: "Le code est en attente de traitement.",
-            showTransferCode: true
+            title: "Délai de confirmation expiré",
+            description: "Le délai de confirmation est expiré. Le vendeur peut encore demander une vérification par l'intermédiaire.",
+            deadline: details.noBuyerResponseVerificationDeadline
         };
     }
 
@@ -525,45 +643,41 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
         if (details.verificationRequested) {
             return {
                 title: "En attente de l'intermédiaire",
-                description: "Une vérification a été demandée. L'intermédiaire doit résoudre le litige.",
-                showTransferCode: true
+                description: "Une vérification a été demandée. L'intermédiaire doit résoudre le litige."
             };
         }
 
-        if (
-            details.disputeReason === 1 &&
-            details.verificationRequestDeadlineActive
-        ) {
+        if (details.disputeReason === 1) {
+            const verificationDeadlineExpired =
+                isDeadlineExpired(
+                    details.verificationRequestDeadline,
+                    currentBlockchainTime
+                );
+
+            if (verificationDeadlineExpired) {
+                return {
+                    title: "Délai de vérification expiré",
+                    description: "Le vendeur n'a pas demandé de vérification dans le délai prévu. Vous pouvez annuler la vente.",
+                    buttons: [
+                        {
+                            action: "cancelAfterVerificationRequestDeadline",
+                            label: "Annuler la vente",
+                            variant: "danger"
+                        }
+                    ]
+                };
+            }
+
             return {
                 title: "En attente du vendeur",
                 description: "Vous avez rejeté le code. Le vendeur peut encore demander sa vérification.",
-                deadline: details.verificationRequestDeadline,
-                showTransferCode: true
-            };
-        }
-
-        if (
-            details.disputeReason === 1 &&
-            details.verificationRequestDeadline > 0n &&
-            now > details.verificationRequestDeadline
-        ) {
-            return {
-                title: "Délai de vérification expiré",
-                description: "Le vendeur n'a pas demandé de vérification dans le délai prévu.",
-                buttons: [
-                    {
-                        action: "cancelAfterVerificationRequestDeadline",
-                        label: "Annuler la vente",
-                        variant: "danger"
-                    }
-                ]
+                deadline: details.verificationRequestDeadline
             };
         }
 
         return {
             title: "Litige en cours",
-            description: "La vente est actuellement en litige.",
-            showTransferCode: true
+            description: "La vente est actuellement en litige."
         };
     }
 
@@ -573,7 +687,10 @@ function getBuyerAction(details: EscrowSaleDetails): RequiredAction {
     };
 }
 
-function getIntermediaryAction(details: EscrowSaleDetails): RequiredAction {
+function getIntermediaryAction(
+    details: EscrowSaleDetails,
+    currentBlockchainTime: number | null
+): RequiredAction {
     const state = details.state;
 
     if (state === 0 || state === 1 || state === 2) {
@@ -601,16 +718,57 @@ function getIntermediaryAction(details: EscrowSaleDetails): RequiredAction {
     }
 
     if (state === 4) {
-        return {
-            title: "En attente du vendeur",
-            description: "Le vendeur doit soumettre le code de transfert."
-        };
+        const transferDeadlineExpired =
+            isDeadlineExpired(
+                details.transferCodeDeadline,
+                currentBlockchainTime
+            );
+
+        return transferDeadlineExpired
+            ? {
+                title: "Délai de soumission expiré",
+                description: "Le vendeur n'a pas soumis le code dans le délai prévu. Le vendeur ou l'acheteur peut maintenant annuler la vente."
+            }
+            : {
+                title: "En attente du vendeur",
+                description: "Le vendeur doit soumettre le code de transfert.",
+                deadline: details.transferCodeDeadline
+            };
     }
 
     if (state === 5) {
+        const confirmDeadlineActive =
+            isDeadlineActive(
+                details.confirmCodeDeadline,
+                currentBlockchainTime,
+                details.confirmCodeDeadlineActive
+            );
+
+        const verificationWindowExpired =
+            isDeadlineExpired(
+                details.noBuyerResponseVerificationDeadline,
+                currentBlockchainTime
+            );
+
+        if (confirmDeadlineActive) {
+            return {
+                title: "En attente de l'acheteur",
+                description: "Le code a été soumis. L'acheteur doit le confirmer ou le rejeter.",
+                deadline: details.confirmCodeDeadline
+            };
+        }
+
+        if (verificationWindowExpired) {
+            return {
+                title: "Délai de vérification expiré",
+                description: "Aucune vérification n'a été demandée dans le délai prévu. Le vendeur ou l'acheteur peut maintenant annuler la vente."
+            };
+        }
+
         return {
-            title: "En attente",
-            description: "Le code a été soumis. L'acheteur doit le confirmer ou le rejeter."
+            title: "En attente du vendeur",
+            description: "Le délai de confirmation de l'acheteur est expiré. Le vendeur peut encore demander une vérification.",
+            deadline: details.noBuyerResponseVerificationDeadline
         };
     }
 
@@ -666,24 +824,44 @@ function getIntermediaryAction(details: EscrowSaleDetails): RequiredAction {
     }
 
     if (state === 9) {
-        if (!details.verificationRequested) {
+        if (details.verificationRequested) {
             return {
-                title: "En attente du vendeur",
-                description: "Le vendeur doit demander la vérification avant que vous puissiez intervenir.",
-                showTransferCode: true
+                title: "Résoudre le litige",
+                description: "Vérifiez le code. Vous pouvez valider le code original, saisir un code corrigé ou constater qu'aucun code valide n'existe.",
+                showTransferCode: true,
+                showCorrectedCodeInput: true,
+                buttons: [
+                    { action: "resolveOriginalCode", label: "Code original valide" },
+                    { action: "resolveCorrectedCode", label: "Valider le code corrigé", variant: "secondary" },
+                    { action: "resolveNoValidCode", label: "Aucun code valide", variant: "danger" }
+                ]
             };
         }
 
+        if (details.disputeReason === 1) {
+            const verificationDeadlineExpired =
+                isDeadlineExpired(
+                    details.verificationRequestDeadline,
+                    currentBlockchainTime
+                );
+
+            return verificationDeadlineExpired
+                ? {
+                    title: "Délai de vérification expiré",
+                    description: "Le vendeur n'a pas demandé de vérification dans le délai prévu. Le vendeur ou l'acheteur peut maintenant annuler la vente."
+                }
+                : {
+                    title: "En attente du vendeur",
+                    description: "Le vendeur doit demander la vérification avant que vous puissiez intervenir.",
+                    deadline: details.verificationRequestDeadline,
+                    showTransferCode: true
+                };
+        }
+
         return {
-            title: "Résoudre le litige",
-            description: "Vérifiez le code. Vous pouvez valider le code original, saisir un code corrigé ou constater qu'aucun code valide n'existe.",
-            showTransferCode: true,
-            showCorrectedCodeInput: true,
-            buttons: [
-                { action: "resolveOriginalCode", label: "Code original valide" },
-                { action: "resolveCorrectedCode", label: "Valider le code corrigé", variant: "secondary" },
-                { action: "resolveNoValidCode", label: "Aucun code valide", variant: "danger" }
-            ]
+            title: "Litige en cours",
+            description: "La vente est actuellement en litige.",
+            showTransferCode: true
         };
     }
 
@@ -695,19 +873,87 @@ function getIntermediaryAction(details: EscrowSaleDetails): RequiredAction {
 
 function getRequiredAction(
     role: EscrowRole,
-    details: EscrowSaleDetails
+    details: EscrowSaleDetails,
+    currentBlockchainTime: number | null
 ) {
-    if (role === "seller") return getSellerAction(details);
-    if (role === "buyer") return getBuyerAction(details);
+    if (role === "seller") {
+        return getSellerAction(
+            details,
+            currentBlockchainTime
+        );
+    }
 
-    return getIntermediaryAction(details);
+    if (role === "buyer") {
+        return getBuyerAction(
+            details,
+            currentBlockchainTime
+        );
+    }
+
+    return getIntermediaryAction(
+        details,
+        currentBlockchainTime
+    );
 }
 
 function getWorkflowStatus(
     step: number,
-    details: EscrowSaleDetails
+    details: EscrowSaleDetails,
+    cancelledWorkflowProgress: number
 ): "completed" | "current" | "future" {
     const state = details.state;
+
+    if (state === 8) {
+        if (step === 0) {
+            return "completed";
+        }
+
+        if (step === 1) {
+            return cancelledWorkflowProgress === 1 ||
+                cancelledWorkflowProgress >= 3
+                ? "completed"
+                : "future";
+        }
+
+        if (step === 2) {
+            return cancelledWorkflowProgress === 2 ||
+                cancelledWorkflowProgress >= 3
+                ? "completed"
+                : "future";
+        }
+
+        if (step === 3) {
+            return cancelledWorkflowProgress >= 3
+                ? "completed"
+                : "future";
+        }
+
+        if (step === 4) {
+            return cancelledWorkflowProgress >= 4
+                ? "completed"
+                : "future";
+        }
+
+        if (step === 5) {
+            return cancelledWorkflowProgress >= 5
+                ? "completed"
+                : "future";
+        }
+
+        if (step === 6) {
+            return cancelledWorkflowProgress >= 6
+                ? "completed"
+                : "future";
+        }
+
+        if (step === 7) {
+            return cancelledWorkflowProgress >= 7
+                ? "completed"
+                : "future";
+        }
+
+        return "future";
+    }
 
     if (step === 0) {
         if (state === 0) return "current";
@@ -794,6 +1040,11 @@ export default function EscrowPage() {
 
     const [clockTick, setClockTick] = useState(0);
 
+    const [
+        cancelledWorkflowProgress,
+        setCancelledWorkflowProgress
+    ] = useState(0);
+
     useEffect(() => {
         let cancelled = false;
 
@@ -852,6 +1103,74 @@ export default function EscrowPage() {
         error: detailsError,
         refetch
     } = useEscrowSale(escrowAddress);
+
+    useEffect(() => {
+        if (
+            !escrowAddress ||
+            !details
+        ) {
+            return;
+        }
+
+        const storageKey =
+            getWorkflowProgressStorageKey(
+                escrowAddress
+            );
+
+        if (details.state !== 8) {
+            const currentProgress =
+                normalizeWorkflowProgressState(
+                    details.state
+                );
+
+            saveWorkflowProgress(
+                escrowAddress,
+                currentProgress
+            );
+
+            setCancelledWorkflowProgress(
+                currentProgress
+            );
+
+            return;
+        }
+
+        const storedValue =
+            localStorage.getItem(
+                storageKey
+            );
+
+        if (
+            storedValue !== null &&
+            /^\d+$/.test(storedValue)
+        ) {
+            setCancelledWorkflowProgress(
+                Math.min(
+                    7,
+                    Number(storedValue)
+                )
+            );
+
+            return;
+        }
+
+        const inferredProgress =
+            inferCancelledWorkflowProgress(
+                details
+            );
+
+        setCancelledWorkflowProgress(
+            inferredProgress
+        );
+
+        localStorage.setItem(
+            storageKey,
+            inferredProgress.toString()
+        );
+    }, [
+        escrowAddress,
+        details
+    ]);
 
     async function waitTransaction(
         hash: Hex,
@@ -1211,6 +1530,19 @@ export default function EscrowPage() {
                 await waitTransaction(hash, "Résolution du litige...");
             }
 
+            if (
+                action === "cancelBeforeVehicleDeposit" ||
+                action === "cancelAfterTransferCodeDeadline" ||
+                action === "cancelAfterConfirmAndVerificationDeadline" ||
+                action === "cancelAfterVerificationRequestDeadline" ||
+                action === "resolveNoValidCode"
+            ) {
+                saveWorkflowProgress(
+                    escrowAddress,
+                    details.state
+                );
+            }
+
             if (action === "cancelBeforeVehicleDeposit") {
                 const hash =
                     await sendContractTransaction(
@@ -1251,9 +1583,7 @@ export default function EscrowPage() {
 
             await refetch();
 
-            setTransactionStatus(
-                "Transaction confirmée."
-            );
+            setTransactionStatus(null);
         } catch (err) {
             if (isUserRejectedError(err)) {
                 setTransactionError(
@@ -1332,12 +1662,6 @@ export default function EscrowPage() {
         );
     }
 
-    const requiredAction =
-        getRequiredAction(
-            role,
-            details
-        );
-
     const currentBlockchainTime =
         blockchainTimeReference
             ? blockchainTimeReference.blockTimestamp +
@@ -1347,6 +1671,25 @@ export default function EscrowPage() {
                 1000
             )
             : null;
+
+    const requiredAction =
+        getRequiredAction(
+            role,
+            details,
+            currentBlockchainTime
+        );
+
+    const buyerCanSeeTransferCode =
+        role !== "buyer" ||
+        details.state === 6 ||
+        (
+            details.state === 5 &&
+            isDeadlineActive(
+                details.confirmCodeDeadline,
+                currentBlockchainTime,
+                details.confirmCodeDeadlineActive
+            )
+        );
 
     void clockTick;
 
@@ -1455,49 +1798,49 @@ export default function EscrowPage() {
                         <WorkflowStep
                             number="1"
                             label="Créée"
-                            status={getWorkflowStatus(0, details)}
+                            status={getWorkflowStatus(0, details, cancelledWorkflowProgress)}
                         />
 
                         <WorkflowStep
                             number="2"
                             label="Financée"
-                            status={getWorkflowStatus(1, details)}
+                            status={getWorkflowStatus(1, details, cancelledWorkflowProgress)}
                         />
 
                         <WorkflowStep
                             number="3"
                             label="NFT déposé"
-                            status={getWorkflowStatus(2, details)}
+                            status={getWorkflowStatus(2, details, cancelledWorkflowProgress)}
                         />
 
                         <WorkflowStep
                             number="4"
                             label="Actifs déposés"
-                            status={getWorkflowStatus(3, details)}
+                            status={getWorkflowStatus(3, details, cancelledWorkflowProgress)}
                         />
 
                         <WorkflowStep
                             number="5"
                             label="Prête"
-                            status={getWorkflowStatus(4, details)}
+                            status={getWorkflowStatus(4, details, cancelledWorkflowProgress)}
                         />
 
                         <WorkflowStep
                             number="6"
                             label="Code soumis"
-                            status={getWorkflowStatus(5, details)}
+                            status={getWorkflowStatus(5, details, cancelledWorkflowProgress)}
                         />
 
                         <WorkflowStep
                             number="7"
                             label="Vente confirmée"
-                            status={getWorkflowStatus(6, details)}
+                            status={getWorkflowStatus(6, details, cancelledWorkflowProgress)}
                         />
 
                         <WorkflowStep
                             number="8"
                             label="Terminée"
-                            status={getWorkflowStatus(7, details)}
+                            status={getWorkflowStatus(7, details, cancelledWorkflowProgress)}
                         />
                     </div>
 
@@ -1558,7 +1901,8 @@ export default function EscrowPage() {
                             )}
                     </div>
 
-                    {requiredAction.showTransferCode && (
+                    {requiredAction.showTransferCode &&
+                        buyerCanSeeTransferCode && (
                         <div className="mt-6 max-w-2xl rounded-xl border border-[#343b44] bg-[#0d1115] p-4">
                             <p className="text-sm text-[#9eabbc]">
                                 Code de transfert
@@ -1795,12 +2139,7 @@ function DeadlineCountdown({
 }) {
     const now = BigInt(currentTime);
 
-    const remaining =
-        deadline > now
-            ? deadline - now
-            : 0n;
-
-    if (remaining === 0n) {
+    if (now > deadline) {
         return (
             <div className="mt-5 w-fit rounded-xl border border-[#654040] bg-[#211617] px-4 py-3">
                 <p className="text-sm font-semibold text-[#c98b8b]">
@@ -1809,6 +2148,8 @@ function DeadlineCountdown({
             </div>
         );
     }
+
+    const remaining = deadline - now;
 
     const days = remaining / 86400n;
     const hours = (remaining % 86400n) / 3600n;

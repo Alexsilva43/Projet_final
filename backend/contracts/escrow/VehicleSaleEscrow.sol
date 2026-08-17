@@ -5,9 +5,9 @@ import {IERC20} from "../interfaces/IERC20.sol";
 import {IERC721, IERC721Receiver} from "../interfaces/IERC721.sol";
 
 contract VehicleSaleEscrow is IERC721Receiver {
-    uint256 private constant MAX_DELAY_TO_SEND_CODE = 2 days;
-    uint256 private constant MAX_DELAY_TO_CONFIRM_CODE = 2 days;
-    uint256 private constant MAX_DELAY_TO_REQUEST_VERIFICATION = 2 days;
+    uint256 private constant MAX_DELAY_TO_SEND_CODE = 2 minutes;
+    uint256 private constant MAX_DELAY_TO_CONFIRM_CODE = 2 minutes;
+    uint256 private constant MAX_DELAY_TO_REQUEST_VERIFICATION = 2 minutes;
 
     enum SaleState {
         Created,

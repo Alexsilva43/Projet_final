@@ -7,19 +7,22 @@ import type { Address } from "viem";
 export const FACTORY_ADDRESS =
     //"0xbea6868c81E444db1726e499a4905f40Cc17B555" as Address; //Sepolia
     //"0x95A19d04763501B40220AC0f825a978600fB3ac0" as Address;  //Base Sepolia 2j
-    "0xB0ea6BcD4Fd39d08A91bD496a03D5f0cd2bb5Ffd" as Address; //Base Sepolia 2min
+    //"0xB0ea6BcD4Fd39d08A91bD496a03D5f0cd2bb5Ffd" as Address; //Base Sepolia 2min
+    "0x18c0A9db7a73e51CbD733bA065a8753Ea673019D" as Address; //Base Sepolia for vercel
 
 /* Remplacez cette valeur par l’adresse du VehicleNFT déployé. */
 export const VEHICLE_NFT_ADDRESS =
     //"0x4c0a05C5Ec9b4858c242C24BAc080dC858801415" as Address; //Sepolia
     // "0xBdc156e4D37e6c125b9658261bD43a4F6d595d84" as Address;  // Base Sepolia 2j
-    "0xBA38D8418406Ed2FB8f54c0cFd01257D508C5F66" as Address;  // Base Sepolia 2min
+    //"0xBA38D8418406Ed2FB8f54c0cFd01257D508C5F66" as Address;  // Base Sepolia 2min
+    "0xC954Ad2c0bbFecdbEe2b7FB21F55432Dff89dde8" as Address; //Base Sepolia for Vercel
 
 
 /* EURC officiel sur Ethereum Sepolia. */
 export const EURC_ADDRESS =
     //"0xC76C5A17A68F8C91549B6A62e3af30c643002Ee7" as Address; // Sepolia
-    "0xE644F134E063e87af275576cA6710Ad7152bF1a0" as Address;   //Base Sepolia
+    //"0xE644F134E063e87af275576cA6710Ad7152bF1a0" as Address;   //Base Sepolia
+    "0xBd87A3717ebEB399512e308FaeD44daE6AaC6026" as Address; // BAse Sepolia for vercel
 
 export const EURC_DECIMALS = 6;
 

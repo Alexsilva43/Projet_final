@@ -4,11 +4,15 @@ pragma solidity 0.8.28;
 import {IERC20} from "../interfaces/IERC20.sol";
 import {IERC721, IERC721Receiver} from "../interfaces/IERC721.sol";
 
+/// @title VehicleSaleEscrow
+/// @notice Manages the lifecycle of a vehicle sale between a seller, a buyer and an intermediary.
+/// @dev Coordinates ERC20 payments, the vehicle NFT, deadlines, cancellation and dispute resolution.
 contract VehicleSaleEscrow is IERC721Receiver {
     uint256 private constant MAX_DELAY_TO_SEND_CODE = 2 minutes;
     uint256 private constant MAX_DELAY_TO_CONFIRM_CODE = 2 minutes;
     uint256 private constant MAX_DELAY_TO_REQUEST_VERIFICATION = 2 minutes;
 
+    /// @notice Represents the current lifecycle state of the vehicle sale.
     enum SaleState {
         Created,
         Funded,
@@ -22,12 +26,14 @@ contract VehicleSaleEscrow is IERC721Receiver {
         Disputed
     }
 
+    /// @notice Identifies the reason for an active dispute.
     enum DisputeReason {
         None,
         CodeRejected,
         BuyerDidNotRespond
     }
 
+    /// @notice Represents the intermediary's verification result when resolving a dispute.
     enum VerificationResult {
         OriginalCodeValid,
         CorrectedCodeValid,
@@ -69,38 +75,102 @@ contract VehicleSaleEscrow is IERC721Receiver {
     uint256 private confirmCodeDeadline;
     uint256 private verificationRequestDeadline;
 
+    /// @notice Emitted when the seller requests the physical deposit of the vehicle.
+    /// @param seller Address of the seller requesting the deposit.
     event DepositRequested(address indexed seller);
+    /// @notice Emitted when the buyer deposits the vehicle price and cancellation guarantee.
+    /// @param from Address providing the funds.
+    /// @param to Escrow address receiving the funds.
+    /// @param amount Vehicle price deposited.
+    /// @param cancellationFee Cancellation guarantee deposited by the buyer.
     event VehiclePriceDeposited(address indexed from,address indexed to,uint256 amount,uint256 cancellationFee);
+    /// @notice Emitted when the vehicle NFT is deposited into the escrow.
+    /// @param from Address transferring the NFT.
+    /// @param to Escrow address receiving the NFT.
+    /// @param nftContract Address of the NFT contract.
+    /// @param tokenId Identifier of the deposited NFT.
     event VehicleNFTDeposited(address indexed from,address indexed to,address indexed nftContract,uint256 tokenId);
+    /// @notice Emitted when the intermediary confirms physical receipt of the vehicle.
+    /// @param intermediary Address of the intermediary confirming the deposit.
     event VehicleDepositConfirmed(address indexed intermediary);
+    /// @notice Emitted when the seller submits the encrypted transfer code.
     event EncryptedTransferCodeSubmitted();
+    /// @notice Emitted when the seller requests verification of the transfer code.
+    /// @param seller Address of the seller requesting verification.
     event TransferCodeVerificationRequested(address indexed seller);
+    /// @notice Emitted when the vehicle sale is confirmed.
+    /// @param seller Address of the seller.
+    /// @param buyer Address of the buyer.
+    /// @param vehiclePrice Vehicle price transferred to the seller.
+    /// @param vehicleTokenId Identifier of the vehicle NFT.
     event SaleConfirmed(address indexed seller,address indexed buyer,uint256 vehiclePrice,uint256 vehicleTokenId);
+    /// @notice Emitted when the intermediary confirms release of the vehicle to the buyer.
+    /// @param intermediary Address of the intermediary.
+    /// @param buyer Address of the buyer receiving the vehicle.
+    /// @param tokenId Identifier of the associated vehicle NFT.
     event VehicleReleased(address indexed intermediary,address indexed buyer,uint256 indexed tokenId);
+    /// @notice Emitted when the intermediary confirms recovery of the vehicle by the seller.
+    /// @param intermediary Address of the intermediary.
+    /// @param seller Address of the seller recovering the vehicle.
+    /// @param tokenId Identifier of the associated vehicle NFT.
     event VehicleRecovered(address indexed intermediary,address indexed seller,uint256 indexed tokenId);
+    /// @notice Emitted whenever the sale workflow changes state.
+    /// @param oldState Previous sale state.
+    /// @param newState New sale state.
     event WorkflowStateChanged(SaleState indexed oldState,SaleState indexed newState);
+    /// @notice Emitted when the buyer requests pickup of the vehicle.
+    /// @param buyer Address of the buyer requesting pickup.
     event PickupRequested(address indexed buyer);
+    /// @notice Emitted when the escrow sale is cancelled.
+    /// @param participant Address that triggered the cancellation.
     event EscrowSaleCancelled(address indexed participant);
+    /// @notice Emitted when the buyer rejects the submitted transfer code.
+    /// @param buyer Address of the buyer rejecting the code.
     event TransferCodeRejected(address indexed buyer);
+    /// @notice Emitted when the seller requests vehicle recovery after cancellation.
+    /// @param seller Address of the seller requesting recovery.
     event VehicleRecoveryRequested(address indexed seller);
+    /// @notice Emitted when the buyer did not confirm or reject the transfer code before the deadline.
+    /// @param buyer Address of the buyer.
     event BuyerDidNotConfirm(address indexed buyer);
+    /// @notice Emitted when a corrected transfer code replaces the previous one.
+    /// @param previousHash Hash of the previously submitted transfer code.
+    /// @param correctedHash Hash of the corrected transfer code.
     event TransferCodeCorrected(bytes32 previousHash,bytes32 correctedHash);
+    /// @notice Emitted when a transfer-code dispute is resolved.
+    /// @param disputeReason Reason that caused the dispute.
+    /// @param verificationResult Result of the intermediary verification.
     event DisputeResolved(DisputeReason indexed disputeReason,VerificationResult indexed verificationResult);
 
+    /// @notice Reverts when the caller is not authorized to perform the requested action.
     error Unauthorized();
+    /// @notice Reverts when an action is attempted in an incompatible sale state.
     error InvalidState();
+    /// @notice Reverts when an invalid address is provided.
     error InvalidAddress();
+    /// @notice Reverts when a required monetary amount is invalid.
     error InvalidAmount();
+    /// @notice Reverts when sale actors do not use distinct addresses.
     error ActorsMustBeDifferent();
+    /// @notice Reverts when a protected function is called reentrantly.
     error ReentrantCall();
+    /// @notice Reverts when an action request has already been submitted.
     error RequestAlreadyMade();
+    /// @notice Reverts when a required prior request has not been submitted.
     error RequestNotMade();
+    /// @notice Reverts when the NFT contract, owner, token or transfer context is invalid.
     error InvalidNFT();
+    /// @notice Reverts when transfer-code data or its hash is invalid.
     error InvalidTransferCode();
+    /// @notice Reverts when the dispute context is invalid for the requested action.
     error InvalidDispute();
+    /// @notice Reverts when an action is attempted after its deadline.
     error DeadlineExpired();
+    /// @notice Reverts when an action requires a deadline to have expired first.
     error DeadlineNotExpired();
+    /// @notice Reverts when the escrow does not hold the required token balance.
     error InsufficientBalance();
+    /// @notice Reverts when an ERC20 transfer operation fails.
     error TokenTransferFailed();
 
     /// @notice Prevents reentrant calls to protected functions.
@@ -136,6 +206,16 @@ contract VehicleSaleEscrow is IERC721Receiver {
     }
 
     /// @notice Initializes the vehicle sale escrow.
+    /// @param _seller Address of the vehicle seller.
+    /// @param _buyer Address of the vehicle buyer.
+    /// @param _intermediary Address of the trusted intermediary.
+    /// @param _tokenERC20 Address of the ERC20 token used for payments and fees.
+    /// @param _vehicleNFT Address of the VehicleNFT contract.
+    /// @param _vehicleTokenId Identifier of the NFT representing the vehicle.
+    /// @param _vehiclePrice Agreed vehicle sale price.
+    /// @param _depositFee Fee paid when requesting vehicle deposit.
+    /// @param _pickupFee Fee paid when requesting vehicle pickup.
+    /// @param _cancellationFee Cancellation guarantee deposited by each party.
     constructor(
         address _seller,
         address _buyer,
@@ -220,6 +300,10 @@ contract VehicleSaleEscrow is IERC721Receiver {
     }
 
     /// @notice Validates reception of the expected vehicle NFT.
+    /// @param operator Address that initiated the NFT transfer.
+    /// @param from Address from which the NFT was transferred.
+    /// @param tokenId Identifier of the NFT received.
+    /// @return The IERC721Receiver selector confirming receipt.
     function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata) external view override returns (bytes4) {
         require(msg.sender == address(vehicleNFT), InvalidNFT());
         require(operator == address(this), InvalidNFT());
@@ -257,6 +341,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
     }
 
     /// @notice Submits the encrypted transfer code before the deadline.
+    /// @param _encryptedTransferCode Encrypted transfer code submitted by the seller.
+    /// @param _transferCodeHash Hash of the submitted transfer code.
     function submitEncryptedTransferCode(bytes calldata _encryptedTransferCode, bytes32 _transferCodeHash) external onlySeller {
         require(state == SaleState.Ready, InvalidState());
         require(transferCodeDeadline != 0, InvalidState());
@@ -355,6 +441,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
         emit WorkflowStateChanged(oldState, state);
     }
 
+    /// @notice Requests intermediary verification after code rejection or buyer timeout.
+    /// @dev Opens or continues a dispute depending on whether the buyer rejected the code or failed to respond.
     function requestTransferCodeVerification() external lock onlySeller {
         require(
             state == SaleState.Disputed || state == SaleState.Submitted,
@@ -385,6 +473,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
     }
 
     /// @notice Confirms that the initially submitted transfer code is valid.
+    /// @param _verifiedTransferCodeHash Hash verified by the intermediary.
     function resolveWithOriginalCode(bytes32 _verifiedTransferCodeHash) external lock onlyIntermediary {
         _requireActiveDispute();
         require(_verifiedTransferCodeHash != bytes32(0), InvalidTransferCode());
@@ -393,6 +482,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
     }
 
     /// @notice Resolves the dispute using a corrected valid transfer code.
+    /// @param _correctedEncryptedTransferCode Corrected encrypted transfer code.
+    /// @param _correctedTransferCodeHash Hash of the corrected transfer code.
     function resolveWithCorrectedCode(bytes calldata _correctedEncryptedTransferCode, bytes32 _correctedTransferCodeHash) external lock onlyIntermediary {
         _requireActiveDispute();
         require(_correctedEncryptedTransferCode.length > 0, InvalidTransferCode());
@@ -464,6 +555,7 @@ contract VehicleSaleEscrow is IERC721Receiver {
         _executeEscrowCancellation(msg.sender);
     }
 
+    /// @notice Cancels the sale when the buyer did not respond and no verification was requested before the allowed period ended.
     function cancelAfterConfirmAndVerificationCodeDeadline() external lock onlyBuyerOrSeller {
         require(state == SaleState.Submitted, InvalidState());
         require(confirmCodeDeadline != 0, InvalidState());
@@ -474,6 +566,8 @@ contract VehicleSaleEscrow is IERC721Receiver {
         _executeEscrowCancellation(msg.sender);
     }
 
+    /// @dev Handles cancellation when dispute verification concludes that no valid transfer code exists.
+    /// Refunds the buyer's cancellation fee, requires vehicle recovery and executes the escrow cancellation.
     function _cancelAfterFailedVerification() internal {
         DisputeReason resolvedReason = disputeReason;
         require(resolvedReason != DisputeReason.None, InvalidDispute());
@@ -484,7 +578,9 @@ contract VehicleSaleEscrow is IERC721Receiver {
         _executeEscrowCancellation(intermediary);
     }
 
-    /// @notice Performs the common escrow cancellation operations.
+    /// @dev Performs the common escrow cancellation operations.
+    /// Resets the dispute state, refunds the buyer when required, returns the NFT to the seller if held by the escrow and emits the cancellation events.
+    /// @param cancelledBy Address considered responsible for triggering the cancellation.
     function _executeEscrowCancellation(address cancelledBy) internal {
         SaleState oldState = state;
         state = SaleState.Cancelled;
@@ -503,6 +599,9 @@ contract VehicleSaleEscrow is IERC721Receiver {
         emit EscrowSaleCancelled(cancelledBy);
     }
 
+    /// @dev Completes the sale after a transfer-code dispute has been successfully resolved.
+    /// Transfers the vehicle price to the seller, the NFT to the buyer and distributes the cancellation fees according to the verification result and dispute reason.
+    /// @param _result Result of the intermediary's transfer-code verification.
     function _completeSaleAfterVerification(VerificationResult _result) internal {
         SaleState oldState = state;
         DisputeReason resolvedReason = disputeReason;
@@ -529,18 +628,27 @@ contract VehicleSaleEscrow is IERC721Receiver {
         emit WorkflowStateChanged(oldState, state);
     }
 
+    /// @dev Transfers ERC20 tokens from an address to the escrow.
+    /// Skips the transfer when the requested amount is zero and reverts if transferFrom fails.
+    /// @param from Address providing the tokens.
+    /// @param amount Amount of tokens to transfer.
     function _transferTokenFrom(address from, uint256 amount) internal {
        if (amount == 0) return;
         bool success = tokenERC20.transferFrom(from, address(this), amount);
         require(success, TokenTransferFailed());
     }
 
+    /// @dev Transfers ERC20 tokens held by the escrow to a recipient.
+    /// Skips the transfer when the requested amount is zero and reverts if the transfer fails.
+    /// @param recipient Address receiving the tokens.
+    /// @param amount Amount of tokens to transfer.
     function _transferTokenTo(address recipient, uint256 amount) internal {
       if (amount == 0) return;
         bool success = tokenERC20.transfer(recipient, amount);
         require(success, TokenTransferFailed());
     }
 
+    /// @dev Validates that an active dispute exists and that transfer-code verification has been requested.
     function _requireActiveDispute() internal view {
         require(state == SaleState.Disputed, InvalidState());
         require(isVerificationRequested, RequestNotMade());
@@ -550,123 +658,153 @@ contract VehicleSaleEscrow is IERC721Receiver {
     //GETTERS
 
     /// @notice Returns the seller address.
+    /// @return Address of the seller.
     function getSeller() external view returns (address) {
         return seller;
     }
 
     /// @notice Returns the buyer address.
+    /// @return Address of the buyer.
     function getBuyer() external view returns (address) {
         return buyer;
     }
 
     /// @notice Returns the intermediary address.
+    /// @return Address of the intermediary.
     function getIntermediary() external view returns (address) {
         return intermediary;
     }
 
     /// @notice Returns the ERC20 token contract.
+    /// @return ERC20 token contract used by the escrow.
     function getTokenERC20Contract() external view returns (IERC20) {
         return tokenERC20;
     }
 
     /// @notice Returns the vehicle NFT contract.
+    /// @return Vehicle NFT contract used by the escrow.
     function getVehicleNFTContract() external view returns (IERC721) {
         return vehicleNFT;
     }
 
     /// @notice Returns the vehicle NFT token ID.
+    /// @return Identifier of the vehicle NFT.
     function getVehicleTokenId() external view returns (uint256) {
         return vehicleTokenId;
     }
 
     /// @notice Returns the agreed vehicle sale price.
+    /// @return Vehicle sale price.
     function getVehiclePrice() external view returns (uint256) {
         return vehiclePrice;
     }
 
     /// @notice Returns the vehicle deposit fee.
+    /// @return Vehicle deposit fee.
     function getDepositFee() external view returns (uint256) {
         return depositFee;
     }
 
     /// @notice Returns the vehicle pickup fee.
+    /// @return Vehicle pickup fee.
     function getPickupFee() external view returns (uint256) {
         return pickupFee;
     }
 
     /// @notice Returns the cancellation guarantee deposited by each party.
+    /// @return Cancellation guarantee amount.
     function getCancellationFee() external view returns (uint256) {
         return cancellationFee;
     }
 
     /// @notice Returns the current escrow state.
+    /// @return Current sale state.
     function getSaleState() external view returns (SaleState) {
         return state;
     }
 
     /// @notice Returns whether the seller has requested the vehicle deposit.
+    /// @return True if the vehicle deposit has been requested.
     function isDepositRequested() external view returns (bool) {
         return depositRequested;
     }
 
     /// @notice Returns whether the buyer has requested the vehicle pickup.
+    /// @return True if vehicle pickup has been requested.
     function isPickupRequested() external view returns (bool) {
         return pickupRequested;
     }
 
     /// @notice Returns whether the vehicle NFT has been deposited into the escrow.
+    /// @return True if the NFT is currently considered deposited.
     function hasNFTBeenDeposited() external view returns (bool) {
         return isNFTDeposited;
     }
 
     /// @notice Returns whether the vehicle price has been funded into the escrow.
+    /// @return True if the vehicle price is currently funded.
     function hasVehiclePriceFunded() external view returns (bool) {
         return isVehiclePriceFunded;
     }
 
+    /// @notice Returns whether transfer-code verification has been requested.
+    /// @return True when a verification request is active.
     function isTransferCodeVerificationRequested() external view  returns (bool) {
         return isVerificationRequested;
     }
 
     /// @notice Returns whether the seller has requested vehicle recovery.
+    /// @return True if vehicle recovery has been requested.
     function isVehicleRecoveryRequested() external view returns (bool) {
         return recoveryRequested;
     }
 
     /// @notice Indicates whether the transfer-code deadline is active.
+    /// @return True while the transfer-code submission deadline is active.
     function isTransferCodeDeadlineActive() external view returns (bool) {
         return transferCodeDeadline != 0 && block.timestamp <= transferCodeDeadline;
     }
 
     /// @notice Indicates whether the confirm-code deadline is active.
+    /// @return True while the buyer confirmation deadline is active.
     function isConfirmCodeDeadlineActive() external view returns (bool) {
         return confirmCodeDeadline != 0 && block.timestamp <= confirmCodeDeadline;
     }
 
     /// @notice Indicates whether the verification request deadline is active.
+    /// @return True while the verification request deadline is active.
     function isVerificationRequestDeadlineActive() external view returns (bool){
         return verificationRequestDeadline != 0 && block.timestamp <= verificationRequestDeadline;
     }
 
     /// @notice Indicates whether the seller must recover the vehicle.
+    /// @return True if vehicle recovery by the seller is required.
     function isVehicleRecoveryRequired() external view returns (bool) {
         return vehicleRecoveryRequired;
     }
 
+    /// @notice Returns the encrypted transfer code stored by the escrow.
+    /// @return The encrypted transfer code.
     function getEncryptedTransferCode() external view returns (bytes memory) {
         require(encryptedTransferCode.length > 0, InvalidTransferCode());
         return encryptedTransferCode;
     }
 
+    /// @notice Returns the hash of the stored transfer code.
+    /// @return The transfer-code hash.
     function getTransferCodeHash() external view returns (bytes32) {
         require(transferCodeHash != 0, InvalidTransferCode());
         return transferCodeHash;
     }
 
+    /// @notice Returns the reason for the current dispute.
+    /// @return The current dispute reason.
     function getDisputeReason() external view returns (DisputeReason) {
         return disputeReason;
     }
 
+    /// @notice Indicates whether the seller may still request verification after the buyer failed to respond.
+    /// @return True while the post-timeout verification request period is active.
     function isVerificationRequestPeriodAfterBuyerTimeoutActive() external view returns (bool) {
         return
             state == SaleState.Submitted &&
@@ -679,22 +817,26 @@ contract VehicleSaleEscrow is IERC721Receiver {
     }
 
     /// @notice Returns the deadline for submitting the transfer code.
+    /// @return Unix timestamp of the transfer-code submission deadline, or zero if inactive.
     function getTransferCodeDeadline() external view returns (uint256) {
         return transferCodeDeadline;
     }
 
     /// @notice Returns the deadline for confirming or rejecting the transfer code.
+    /// @return Unix timestamp of the buyer confirmation deadline, or zero if inactive.
     function getConfirmCodeDeadline() external view returns (uint256) {
         return confirmCodeDeadline;
     }
 
     /// @notice Returns the deadline for requesting verification after code rejection.
+    /// @return Unix timestamp of the verification request deadline, or zero if inactive.
     function getVerificationRequestDeadline() external view returns (uint256) {
         return verificationRequestDeadline;
     }
 
     /// @notice Returns the end of the verification request period
     /// after the buyer failed to respond.
+    /// @return Unix timestamp marking the end of the verification request period, or zero if inactive.
     function getNoBuyerResponseVerificationDeadline() external view returns (uint256)  {
         if (confirmCodeDeadline == 0) return 0;
         return confirmCodeDeadline + MAX_DELAY_TO_REQUEST_VERIFICATION;
